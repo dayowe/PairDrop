@@ -293,8 +293,11 @@ class ServerConnection {
     }
 
     _onVisibilityChange() {
-        if (window.hiddenProperty) return;
-        this._connect();
+        const isHidden = window.hiddenProperty ? document[window.hiddenProperty] : false;
+        if (isHidden) return;
+        if (!this._isConnected() && !this._isConnecting()) {
+            this._connect();
+        }
     }
 
     _isConnected() {
