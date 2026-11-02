@@ -68,7 +68,7 @@ request, then read. No shutdown.
 
 Every variable and flag is listed in
 [host-your-own.md](host-your-own.md#environment-variables). Upstream's all work the same way;
-this fork adds `TRUST_CF_CONNECTING_IP` and `AUTO_CLOSE_RECEIVE_DIALOG`, and does not implement
+this fork adds `TRUST_CF_CONNECTING_IP` and `SKIP_RECEIVE_DIALOGS`, and does not implement
 `--auto-restart`.
 
 Upstream trusts `cf-connecting-ip` unconditionally, so anyone can forge it and join an arbitrary

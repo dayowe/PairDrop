@@ -836,6 +836,10 @@ class ReceiveDialog extends Dialog {
         this.$fileSize = this.$el.querySelector('.file-size');
         this.$previewBox = this.$el.querySelector('.file-preview');
         this.$receiveTitle = this.$el.querySelector('h2:first-of-type');
+
+        // Set by SKIP_RECEIVE_DIALOGS on the server.
+        this._skipReceiveDialogs = false;
+        Events.on('config', e => this._skipReceiveDialogs = !!e.detail.skipReceiveDialogs);
     }
 
     _formatFileSize(bytes) {
@@ -896,10 +900,6 @@ class ReceiveFileDialog extends ReceiveDialog {
 
         Events.on('files-received', e => this._onFilesReceived(e.detail.peerId, e.detail.files, e.detail.imagesOnly, e.detail.totalSize));
         this._filesQueue = [];
-
-        // Set by AUTO_CLOSE_RECEIVE_DIALOG on the server.
-        this._autoCloseReceiveDialog = false;
-        Events.on('config', e => this._autoCloseReceiveDialog = !!e.detail.autoCloseReceiveDialog);
     }
 
     async _onFilesReceived(peerId, files, imagesOnly, totalSize) {
@@ -1051,29 +1051,30 @@ class ReceiveFileDialog extends ReceiveDialog {
             setTimeout(() => this.$downloadBtn.style.pointerEvents = "unset", 2000);
         };
 
+        Events.fire('set-progress', {peerId: peerId, progress: 1, status: 'process'})
+
+        if (this._skipReceiveDialogs && !canShare) {
+            // Download without ever showing the dialog, then release the queue for the next
+            // files. Not for the share sheet: it needs the dialog's share button.
+            this.$downloadBtn.click();
+            this._releaseAndContinue();
+            return;
+        }
+
         document.title = files.length === 1
             ? `${ Localization.getTranslation("document-titles.file-received") } - PairDrop`
             : `${ Localization.getTranslation("document-titles.file-received-plural", null, {count: files.length}) } - PairDrop`;
         changeFavicon("images/favicon-96x96-notification.png");
 
-        Events.fire('set-progress', {peerId: peerId, progress: 1, status: 'process'})
         this.show();
 
         setTimeout(() => {
             // wait for the dialog to be shown
             if (canShare) {
-                // Never auto-close over the share sheet: it is the user's own dialog, and
-                // closing underneath it drops the file.
                 this.$shareBtn.click();
             }
             else {
                 this.$downloadBtn.click();
-
-                if (this._autoCloseReceiveDialog) {
-                    // The download was the only reason the dialog was up. Give the browser a
-                    // moment to take the blob, then get out of the way.
-                    setTimeout(() => this.hide(), 500);
-                }
             }
         }, 500);
 
@@ -1100,6 +1101,10 @@ class ReceiveFileDialog extends ReceiveDialog {
 
     hide() {
         super.hide();
+        this._releaseAndContinue();
+    }
+
+    _releaseAndContinue() {
         setTimeout(async () => {
             this.$shareBtn.setAttribute('hidden', true);
             this.$downloadBtn.setAttribute('disabled', true);
@@ -1134,6 +1139,14 @@ class ReceiveRequestDialog extends ReceiveDialog {
     }
 
     _onRequestFileTransfer(request, peerId) {
+        if (this._skipReceiveDialogs) {
+            // Accept without asking. No dialog, so nothing to queue.
+            Events.fire('respond-to-files-transfer-request', {to: peerId, accepted: true});
+            Events.fire('set-progress', {peerId: peerId, progress: 0, status: 'wait'});
+            NoSleepUI.enable();
+            return;
+        }
+
         this._filesTransferRequestQueue.push({request: request, peerId: peerId});
         if (this.isShown()) return;
         this._dequeueRequests();

@@ -242,7 +242,7 @@ Everything this server reads, in one place. Each one has a section below.
 | `SIGNALING_SERVER` | `false` | Use another instance's signaling server, as a host without a protocol prefix. |
 | `IPV6_LOCALIZE` | `false` | `1`-`7`: how many IPv6 hextets group peers into a room. `4` groups a `/64`. |
 | `TRUST_CF_CONNECTING_IP` | `false` | Honour the `cf-connecting-ip` header. **Added by this fork.** |
-| `AUTO_CLOSE_RECEIVE_DIALOG` | `false` | Close the receive dialog once a download starts. **Added by this fork.** |
+| `SKIP_RECEIVE_DIALOGS` | `false` | Accept transfers and download them without the confirmation or file received dialogs. **Added by this fork.** |
 | `DONATION_BUTTON_*` | unset | `_ACTIVE`, `_LINK`, `_TITLE`. Hidden unless configured in this fork. |
 | `TWITTER_BUTTON_*` | unset | As above. Hidden unless configured in this fork. |
 | `MASTODON_BUTTON_*` | unset | As above. |
@@ -270,18 +270,19 @@ TRUST_CF_CONNECTING_IP=false
 > ([#510](https://github.com/schlagmichdoch/PairDrop/issues/510)). Set this to `true` only when
 > Cloudflare is genuinely the only route in.
 
-### Receive dialog
+### Receive dialogs
 
 ```bash
-AUTO_CLOSE_RECEIVE_DIALOG=false
+SKIP_RECEIVE_DIALOGS=false
 ```
 
 > Default: `false`
 >
-> A completed transfer downloads the file and leaves the receive dialog open with a
-> "Download again" button. Set this to `true` and the dialog closes itself once the download has
-> started. It does not apply when the browser offers its native share sheet, since that is the
-> user's own dialog and closing underneath it drops the file.
+> Set this to `true` and neither receive dialog is shown. Incoming transfers are accepted without
+> the confirmation dialog, and files download without the file received dialog. Every peer that
+> can reach a device can then send it files unprompted, so enable it only where that is fine.
+> Browsers that offer the native share sheet still get the file received dialog, since the share
+> button lives there.
 
 ### Client directory
 
