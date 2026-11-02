@@ -2,7 +2,7 @@
 set -e
 
 # PairDrop version when this file was last changed
-version="v2.1.0"
+version="v2.2.0"
 
 ############################################################
 # Help                                                     #
