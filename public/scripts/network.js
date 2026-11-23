@@ -221,6 +221,10 @@ class ServerConnection {
     }
 
     _onDisplayName(msg) {
+        if (this._peerId && this._peerId !== msg.peerId) {
+            Events.fire('peer-id-changed', msg.peerId);
+        }
+        this._peerId = msg.peerId;
         // Add peerId and peerIdHash to sessionStorage to authenticate as the same device on page reload
         sessionStorage.setItem('peer_id', msg.peerId);
         sessionStorage.setItem('peer_id_hash', msg.peerIdHash);
@@ -331,6 +335,7 @@ class Peer {
 
         this._filesQueue = [];
         this._busy = false;
+        this._pendingTexts = 0;
 
         // evaluate auto accept
         this._evaluateAutoAccept();
@@ -344,7 +349,7 @@ class Peer {
     _send(message) {}
 
     sendDisplayName(displayName) {
-        this.sendJSON({type: 'display-name-changed', displayName: displayName});
+        this.sendJSON({type: 'display-name-changed', displayName: displayName, supportsSessionEnd: this.rtcSupported});
     }
 
     _isSameBrowser() {
@@ -434,6 +439,7 @@ class Peer {
     }
 
     async requestFileTransfer(files) {
+        this._filesRequested = files;
         let header = [];
         let totalSize = 0;
         let imagesOnly = true
@@ -460,8 +466,6 @@ class Peer {
         }
 
         Events.fire('set-progress', {peerId: this._peerId, progress: 1, status: 'prepare'})
-
-        this._filesRequested = files;
 
         this.sendJSON({type: 'request',
             header: header,
@@ -690,12 +694,14 @@ class Peer {
     }
 
     _onMessageTransferCompleted() {
+        if (this._pendingTexts) this._pendingTexts--;
         Events.fire('notify-user', Localization.getTranslation("notifications.message-transfer-completed"));
     }
 
     sendText(text) {
         const unescaped = btoa(unescape(encodeURIComponent(text)));
         this.sendJSON({ type: 'text', text: unescaped });
+        this._pendingTexts++;
     }
 
     _onTextReceived(message) {
@@ -706,6 +712,7 @@ class Peer {
     }
 
     _onDisplayNameChanged(message) {
+        this._supportsSessionEnd = message.supportsSessionEnd;
         const displayNameHasChanged = this._displayName !== message.displayName
 
         if (message.displayName && displayNameHasChanged) {
@@ -804,20 +811,62 @@ class RTCPeer extends Peer {
     _onChannelOpened(event) {
         console.log('RTC: channel opened with', this._peerId);
         const channel = event.channel || event.target;
+        if (this.retiring) {
+            channel.close();
+            return;
+        }
         channel.binaryType = 'arraybuffer';
         channel.onmessage = e => this._onMessage(e.data);
         channel.onclose = _ => this._onChannelClosed();
         this._channel = channel;
-        Events.on('beforeunload', e => this._onBeforeUnload(e));
-        Events.on('pagehide', _ => this._onPageHide());
+        this._pageEvents?.abort();
+        this._pageEvents = new AbortController();
+        Events.on('beforeunload', e => this._onBeforeUnload(e), {signal: this._pageEvents.signal});
+        Events.on('pagehide', _ => this._onPageHide(), {signal: this._pageEvents.signal});
         Events.fire('peer-connected', {peerId: this._peerId, connectionHash: this.getConnectionHash()});
     }
 
     _onMessage(message) {
         if (typeof message === 'string') {
-            console.log('RTC:', JSON.parse(message));
+            const data = JSON.parse(message);
+            console.log('RTC:', data);
+            if (data.type === 'session-end') {
+                this._supportsSessionEnd = true;
+                this._remoteSessionEnded = data.drained;
+                this.retire();
+                return;
+            }
         }
         super._onMessage(message);
+        if (this.retiring) this._finishSession();
+    }
+
+    retire() {
+        if (!this.retiring) {
+            this.retiring = new Promise(resolve => this._resolveRetirement = resolve);
+            Events.fire('peer-retiring', this._peerId);
+        }
+        this._finishSession();
+    }
+
+    _finishSession() {
+        if (!this._isConnected()) {
+            if (this._channel?.readyState !== 'closing') this._disconnect();
+            return;
+        }
+        const drained = !(this._busy || this._filesRequested || this._requestPending || this._requestAccepted || this._pendingTexts);
+        // Tell the other end to stop accepting new sends. Its ordered reply confirms
+        // that any offers or texts already in flight were acknowledged.
+        if (this._supportsSessionEnd && drained !== this._reportedDrained) {
+            this.sendJSON({type: 'session-end', drained});
+            this._reportedDrained = drained;
+        }
+        if (drained && (!this._supportsSessionEnd || this._remoteSessionEnded)) this._channel.close();
+    }
+
+    _respondToFileTransferRequest(accepted) {
+        super._respondToFileTransferRequest(accepted);
+        if (this.retiring) this._finishSession();
     }
 
     getConnectionHash() {
@@ -868,7 +917,7 @@ class RTCPeer extends Peer {
     _onChannelClosed() {
         console.log('RTC: channel closed', this._peerId);
         Events.fire('peer-disconnected', this._peerId);
-        if (!this._isCaller) return;
+        if (!this._isCaller || this.retiring) return;
         this._connect(); // reopen the channel
     }
 
@@ -906,6 +955,7 @@ class RTCPeer extends Peer {
     }
 
     _sendSignal(signal) {
+        if (this.retiring) return;
         signal.type = 'signal';
         signal.to = this._peerId;
         signal.roomType = this._getRoomTypes()[0];
@@ -984,12 +1034,18 @@ class PeersManager {
     constructor(serverConnection) {
         this.peers = {};
         this._server = serverConnection;
-        Events.on('signal', e => this._onMessage(e.detail));
+        Events.on('peer-id-changed', e => {
+            this._localPeerId = e.detail;
+            for (const peer of Object.values(this.peers)) {
+                if (peer.rtcSupported) peer.retire();
+            }
+        });
+        Events.on('signal', e => this._afterRetirement(e.detail.sender.id, () => this._onMessage(e.detail)));
         Events.on('peers', e => this._onPeers(e.detail));
         Events.on('files-selected', e => this._onFilesSelected(e.detail));
         Events.on('respond-to-files-transfer-request', e => this._onRespondToFileTransferRequest(e.detail))
         Events.on('send-text', e => this._onSendText(e.detail));
-        Events.on('peer-left', e => this._onPeerLeft(e.detail));
+        Events.on('peer-left', e => this._afterRetirement(e.detail.peerId, () => this._onPeerLeft(e.detail)));
         Events.on('peer-joined', e => this._onPeerJoined(e.detail));
         Events.on('peer-connected', e => this._onPeerConnected(e.detail.peerId));
         Events.on('peer-disconnected', e => this._onPeerDisconnected(e.detail));
@@ -1017,7 +1073,18 @@ class PeersManager {
 
     _onMessage(message) {
         const peerId = message.sender.id;
-        this.peers[peerId].onServerMessage(message);
+        this.peers[peerId]?.onServerMessage(message);
+    }
+
+    // A remote peer can retain its ID when ours changes. Keep messages for the
+    // replacement in order, without blocking discovery of any other peer.
+    _afterRetirement(peerId, action) {
+        const retiring = this.peers[peerId]?.retiring;
+        if (!retiring) return action();
+        const localPeerId = this._localPeerId;
+        retiring.then(() => {
+            if (localPeerId === this._localPeerId) action();
+        });
     }
 
     _refreshPeer(peerId, roomType, roomId) {
@@ -1060,12 +1127,13 @@ class PeersManager {
     }
 
     _onPeerJoined(message) {
-        this._createOrRefreshPeer(false, message.peer.id, message.roomType, message.roomId, message.peer.rtcSupported);
+        const peer = message.peer;
+        this._afterRetirement(peer.id, () => this._createOrRefreshPeer(false, peer.id, message.roomType, message.roomId, peer.rtcSupported));
     }
 
     _onPeers(message) {
         message.peers.forEach(peer => {
-            this._createOrRefreshPeer(true, peer.id, message.roomType, message.roomId, peer.rtcSupported);
+            this._afterRetirement(peer.id, () => this._createOrRefreshPeer(true, peer.id, message.roomType, message.roomId, peer.rtcSupported));
         })
     }
 
@@ -1081,13 +1149,19 @@ class PeersManager {
         this.peers[detail.to]._respondToFileTransferRequest(detail.accepted);
     }
 
+    _peerForNewTransfer(peerId) {
+        const peer = this.peers[peerId];
+        if (peer && !peer.retiring) return peer;
+        Events.fire('notify-user', Localization.getTranslation('notifications.selected-peer-left'));
+    }
+
     async _onFilesSelected(message) {
-        let files = mime.addMissingMimeTypesToFiles([...message.files]);
-        await this.peers[message.to].requestFileTransfer(files);
+        const peer = this._peerForNewTransfer(message.to);
+        if (peer) await peer.requestFileTransfer(mime.addMissingMimeTypesToFiles([...message.files]));
     }
 
     _onSendText(message) {
-        this.peers[message.to].sendText(message.text);
+        this._peerForNewTransfer(message.to)?.sendText(message.text);
     }
 
     _onPeerLeft(message) {
@@ -1136,7 +1210,13 @@ class PeersManager {
     _onPeerDisconnected(peerId) {
         const peer = this.peers[peerId];
         delete this.peers[peerId];
-        if (!peer || !peer._conn) return;
+        if (!peer || !peer.rtcSupported) return;
+        peer._pageEvents?.abort();
+        peer._resolveRetirement?.();
+        if (!peer._conn) return;
+        peer._conn.onconnectionstatechange = null;
+        peer._conn.ondatachannel = null;
+        peer._conn.onicecandidate = null;
         if (peer._channel) peer._channel.onclose = null;
         peer._conn.close();
         peer._busy = false;

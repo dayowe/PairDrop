@@ -29,6 +29,10 @@ class PeersUI {
         Events.on('peer-added', _ => this._evaluateOverflowingPeers());
         Events.on('peer-connected', e => this._onPeerConnected(e.detail.peerId, e.detail.connectionHash));
         Events.on('peer-disconnected', e => this._onPeerDisconnected(e.detail));
+        Events.on('peer-retiring', e => {
+            const tile = $(e.detail);
+            if (tile) tile.hidden = true;
+        });
         Events.on('peers', e => this._onPeers(e.detail));
         Events.on('set-progress', e => this._onSetProgress(e.detail));
 
