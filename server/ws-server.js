@@ -298,6 +298,10 @@ export default class PairDropWsServer {
     }
 
     _joinIpRoom(peer) {
+        if (!peer.ip) {
+            this._send(peer, {type: 'peers', roomType: 'ip', roomId: null, peers: []});
+            return;
+        }
         this._joinRoom(peer, 'ip', peer.ip);
     }
 

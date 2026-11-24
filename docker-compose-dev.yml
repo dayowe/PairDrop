@@ -2,9 +2,11 @@ version: "3"
 services:
   pairdrop:
     build: .
+    network_mode: "service:nginx"
     container_name: pairdrop
     restart: unless-stopped
     environment:
+      - TRUSTED_PROXIES=127.0.0.1
       - PUID=1000 # UID to run the application as
       - PGID=1000 # GID to run the application as
       - WS_FALLBACK=false # Set to true to enable websocket fallback if the peer to peer WebRTC connection is not available to the client.
@@ -12,8 +14,6 @@ services:
       - RTC_CONFIG=false # Set to the path of a file that specifies the STUN/TURN servers.
       - DEBUG_MODE=false # Set to true to debug container and peer connections.
       - TZ=Etc/UTC # Time Zone
-    ports:
-      - "127.0.0.1:3000:3000" # Web UI. Change the port number before the last colon e.g. `127.0.0.1:9000:3000`
   nginx:
     build:
       context: dev/
@@ -25,10 +25,11 @@ services:
       - ./dev/openssl:/mnt/openssl
       - ./dev/nginx/default.conf:/etc/nginx/conf.d/default.conf
     ports:
+      - "127.0.0.1:3000:3000"
       - "8080:80"
       - "8443:443"
     environment:
       - FQDN=localhost
-    entrypoint: /mnt/openssl/create.sh
+    entrypoint: ["/bin/sh", "/mnt/openssl/create.sh"]
     command: ["nginx", "-g", "daemon off;"]
     restart: unless-stopped

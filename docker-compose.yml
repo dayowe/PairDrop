@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     environment:
       - PEER_ID_SECRET
+      - TRUSTED_PROXIES
       - PUID=1000 # UID to run the application as
       - PGID=1000 # GID to run the application as
       - WS_FALLBACK=false # Set to true to enable websocket fallback if the peer to peer WebRTC connection is not available to the client.

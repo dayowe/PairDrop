@@ -19,13 +19,11 @@ export default class PairDropServer {
             })
 
             app.use(limiter);
-            // ensure correct client ip and not the ip of the reverse proxy is used for rate limiting
-            // see https://express-rate-limit.mintlify.app/guides/troubleshooting-proxy-issues
-
-            app.set('trust proxy', conf.rateLimit);
+            // Keep the existing HTTP hop-count setting when no proxy list is configured.
+            app.set('trust proxy', conf.trustProxy || conf.rateLimit);
 
             if (!conf.debugMode) {
-                console.log("Use DEBUG_MODE=true to find correct number for RATE_LIMIT.");
+                console.log("Use DEBUG_MODE=true locally to check the rate limiter's client address at /ip.");
             }
         }
 
@@ -38,7 +36,7 @@ export default class PairDropServer {
         if (conf.debugMode && conf.rateLimit) {
             console.debug("\n");
             console.debug("----DEBUG RATE_LIMIT----")
-            console.debug("To find out the correct value for RATE_LIMIT go to '/ip' and ensure the returned IP-address is the IP-address of your client.")
+            console.debug("Visit '/ip' to check the client address used for HTTP rate limiting.")
             console.debug("See https://github.com/express-rate-limit/express-rate-limit#troubleshooting-proxy-issues for more info")
             app.get('/ip', (req, res) => {
                 res.send(req.ip);

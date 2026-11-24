@@ -16,7 +16,7 @@ function setup(t) {
         server._wss.close();
     });
 
-    function connect(identity) {
+    function connect(identity, headers = {}) {
         const messages = [];
         const socket = new EventEmitter();
         socket.readyState = WebSocket.OPEN;
@@ -27,7 +27,7 @@ function setup(t) {
             url.searchParams.set('peer_id', identity.peerId);
             url.searchParams.set('peer_id_hash', identity.peerIdHash);
         }
-        const peer = new Peer(socket, {url: url.href, socket: {remoteAddress: '127.0.0.1'}, headers: {}}, {});
+        const peer = new Peer(socket, {url: url.href, socket: {remoteAddress: '127.0.0.1'}, headers}, {});
         server._onConnection(peer);
         const client = {
             peer, messages,
@@ -40,6 +40,21 @@ function setup(t) {
 
     return {server, connect};
 }
+
+test('clients without a verified address can pair while their IP discovery stays empty', t => {
+    const {server, connect} = setup(t);
+    const a = connect(undefined, {'x-forwarded-for': '192.0.2.1'});
+    const b = connect(undefined, {'x-forwarded-for': '192.0.2.2'});
+    for (const client of [a, b]) {
+        client.send('join-ip-room');
+        assert.deepEqual(client.last('peers').peers, []);
+    }
+    assert.equal(server._rooms.get('ip').size, 0);
+    a.send('pair-device-initiate');
+    b.send('pair-device-join', {pairKey: a.last('pair-device-initiated').pairKey});
+    assert.equal(a.last('peer-joined').peer.id, b.peer.id);
+    assert.equal(b.last('peers').roomType, 'secret');
+});
 
 test('unused, replaced and cancelled invitations never create memberships', t => {
     const {server, connect} = setup(t);

@@ -68,8 +68,7 @@ docker build --pull . -f Dockerfile -t pairdrop
 docker run -d --restart=unless-stopped --name=pairdrop -p 127.0.0.1:3000:3000 -it pairdrop
 ```
 
-> You must use a server proxy to set the `X-Forwarded-For` header 
-> to prevent all clients from discovering each other (See [#HTTP-Server](#http-server)).
+> For IP discovery behind a reverse proxy, configure [trusted proxies](#trusted-proxies) on the signaling server.
 >
 > To prevent bypassing the proxy by reaching the docker container directly, 
 > `127.0.0.1` is specified in the run command.
@@ -143,8 +142,7 @@ services:
 
 Run the compose file with `docker compose up -d`.
 
-> You must use a server proxy to set the `X-Forwarded-For` header
-> to prevent all clients from discovering each other (See [#HTTP-Server](#http-server)).
+> For IP discovery behind a reverse proxy, configure [trusted proxies](#trusted-proxies) on the signaling server.
 >
 > To prevent bypassing the proxy by reaching the Docker container 
 > directly, `127.0.0.1` is specified in the `ports` argument.
@@ -199,8 +197,7 @@ npm start -- --localhost-only
 
 > Only allow connections from localhost.
 >
-> You must use a server proxy to set the `X-Forwarded-For` header 
-> to prevent all clients from discovering each other (See [#HTTP-Server](#http-server)).
+> For IP discovery behind a reverse proxy, configure [trusted proxies](#trusted-proxies) on the signaling server.
 >
 > Use this when deploying PairDrop with node to prevent 
 > bypassing the reverse proxy by reaching the Node.js server directly.
@@ -253,6 +250,22 @@ Overview of available Environment Variables are found [here](#environment-variab
 
 ## Environment Variables
 
+### Trusted proxies
+
+Set `TRUSTED_PROXIES` to a comma-separated list of proxy IP addresses or CIDRs. Use an image built from this fork. The standard and Coturn Compose files read the setting from `.env`. Use the source address **as seen by PairDrop**. This example is for nginx connecting over IPv4 loopback.
+
+```dotenv
+TRUSTED_PROXIES=127.0.0.1
+```
+
+For separate containers, use a stable address for the reverse proxy on the backend network. A dedicated CIDR also works if only trusted proxies can connect from it. Keep the backend port private. When upgrading an existing proxied installation, set this value before switching images.
+
+At the public edge, have the proxy overwrite `X-Forwarded-For` with the verified client address. PairDrop follows that chain from the socket towards the client, stopping at the first address outside the trust list. On installations using Cloudflare or another CDN, configure nginx to recover the visitor address only from the CDN's trusted ingress ranges before forwarding it. PairDrop uses `X-Forwarded-For` for client addresses across providers. [nginx real IP module](https://nginx.org/en/docs/http/ngx_http_realip_module.html)
+
+Direct connections use the socket IP by default. Forwarded requests from an unlisted intermediary and requests from a listed proxy without a usable client address have no IP-based discovery. Device pairing and public rooms still work. A proxy that supplies no forwarding information at all is indistinguishable from a direct client unless you list its address.
+
+To check a new proxy, open two unpaired sessions on the same public IPv4 address and a third on mobile data. The first two should discover each other. The third should appear only after pairing or joining a shared room.
+
 ### Keep peer IDs across signaling server restarts
 
 The signaling server uses `PEER_ID_SECRET` to recognize a returning browser or Companion session. Keeping the same value across deployments lets a session reconnect with its existing peer ID while a direct WebRTC transfer continues. With the setting omitted, each server process generates its own secret. Enabling it for the first time or rotating it gives connected sessions new IDs on their next reconnect. Saved device pairings are independent of this setting.
@@ -297,7 +310,6 @@ DEBUG_MODE="true"
 > ----DEBUGGING-PEER-IP-START----
 > remoteAddress: ::ffff:172.17.0.1
 > x-forwarded-for: 19.117.63.126
-> cf-connecting-ip: undefined
 > PairDrop uses: 19.117.63.126
 > IP is private: false
 > if IP is private, '127.0.0.1' is used instead
@@ -322,6 +334,8 @@ RATE_LIMIT=1
 > Default: `false`
 >
 > Limits clients to 1000 requests per 5 min
+>
+> When `TRUSTED_PROXIES` is set, the HTTP rate limiter and WebSocket discovery use that proxy list. Without it, the limiter retains its existing numeric hop-count configuration. The following steps describe that HTTP-only setting.
 >
 > "If you are behind a proxy/load balancer (usually the case with most hosting services, e.g. Heroku, Bluemix, AWS ELB,
 > Render, Nginx, Cloudflare, Akamai, Fastly, Firebase Hosting, Rackspace LB, Riverbed Stingray, etc.), the IP address of
@@ -492,8 +506,7 @@ PRIVACYPOLICY_BUTTON_TITLE="Open our privacy policy"
 
 ## HTTP-Server
 
-When running PairDrop, the `X-Forwarded-For` header has to be set by a proxy. \
-Otherwise, all clients will be mutually visible.
+For a proxied deployment, set [trusted proxies](#trusted-proxies) and pass the client address on HTTP requests and WebSocket upgrades.
 
 To check if your setup is configured correctly [use the environment variable `DEBUG_MODE="true"`](#debug-mode).
 
@@ -510,6 +523,7 @@ server {
     location / {
         proxy_connect_timeout 300;
         proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
         proxy_set_header Connection "upgrade";
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header X-Forwarded-for $remote_addr;
@@ -526,6 +540,7 @@ server {
     location / {
         proxy_connect_timeout 300;
         proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
         proxy_set_header Connection "upgrade";
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header X-Forwarded-for $remote_addr;
@@ -556,6 +571,7 @@ server {
     location / {
         proxy_connect_timeout 300;
         proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
         proxy_set_header Connection "upgrade";
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header X-Forwarded-for $remote_addr;

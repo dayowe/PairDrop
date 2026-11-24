@@ -3,6 +3,7 @@ import fs from "fs";
 
 import PairDropServer from "./server.js";
 import PairDropWsServer from "./ws-server.js";
+import {compileTrustedProxies} from "./client-ip.js";
 
 // Handle SIGINT
 process.on('SIGINT', () => {
@@ -56,6 +57,12 @@ conf.signalingServer = process.env.SIGNALING_SERVER && process.env.SIGNALING_SER
     : false;
 
 conf.ipv6Localize = parseInt(process.env.IPV6_LOCALIZE) || false;
+try {
+    conf.trustProxy = compileTrustedProxies(process.env.TRUSTED_PROXIES);
+} catch (error) {
+    console.error("Invalid TRUSTED_PROXIES:", error.message);
+    process.exit(1);
+}
 
 let rateLimit = false;
 if (process.argv.includes('--rate-limit') || process.env.RATE_LIMIT === "true") {

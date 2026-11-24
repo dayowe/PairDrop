@@ -2,6 +2,7 @@ import crypto from "crypto";
 import parser from "ua-parser-js";
 import {animals, colors, uniqueNamesGenerator} from "unique-names-generator";
 import {cyrb53, hasher} from "./helper.js";
+import {getDiscoveryAddress} from "./client-ip.js";
 
 export default class Peer {
 
@@ -42,14 +43,10 @@ export default class Peer {
     }
 
     _setIP(request) {
-        if (request.headers['cf-connecting-ip']) {
-            this.ip = request.headers['cf-connecting-ip'].split(/\s*,\s*/)[0];
-        }
-        else if (request.headers['x-forwarded-for']) {
-            this.ip = request.headers['x-forwarded-for'].split(/\s*,\s*/)[0];
-        }
-        else {
-            this.ip = request.socket.remoteAddress ?? '';
+        this.ip = getDiscoveryAddress(request, this.conf.trustProxy);
+        if (!this.ip) {
+            if (this.conf.debugMode) console.debug("IP discovery unavailable: no verified client address.");
+            return;
         }
 
         // remove the prefix used for IPv4-translated addresses
@@ -66,9 +63,8 @@ export default class Peer {
         if (this.conf.debugMode) {
             console.debug("\n");
             console.debug("----DEBUGGING-PEER-IP-START----");
-            console.debug("remoteAddress:", request.connection.remoteAddress);
+            console.debug("remoteAddress:", request.socket.remoteAddress);
             console.debug("x-forwarded-for:", request.headers['x-forwarded-for']);
-            console.debug("cf-connecting-ip:", request.headers['cf-connecting-ip']);
             if (ipv6_was_localized) {
                 console.debug("IPv6 client IP was localized to", this.conf.ipv6Localize, this.conf.ipv6Localize > 1 ? "segments" : "segment");
             }
