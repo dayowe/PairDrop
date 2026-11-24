@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {createServer} from 'node:http';
 import {test} from 'node:test';
@@ -90,6 +91,8 @@ test('redemption confirms both devices before discovery and keeps existing pairi
     assert.equal(b.last('peers').peers[0].id, a.peer.id);
     assert.equal(a.peer.roomSecrets.size, 102);
     assert.equal(server._roomSecrets.size, 0);
+    b.send('pair-device-join', {pairKey});
+    assert.equal(b.messages.at(-1).type, 'pair-device-join-key-invalid');
 
     a.send('regenerate-room-secret', {roomSecret});
     const rotated = a.last('room-secret-regenerated').newRoomSecret;
@@ -101,8 +104,22 @@ test('redemption confirms both devices before discovery and keeps existing pairi
     assert.equal(a.peer.roomSecrets.size, 101);
 });
 
-test('late disconnect preserves the replacement socket in each kind of room', t => {
+test('accepts numeric six-digit codes and preserves leading zeros in string codes', t => {
     const {connect} = setup(t);
+    const a = connect(), b = connect();
+    const random = t.mock.method(crypto, 'randomInt');
+    for (const [digits, wireCode] of [['654321', 654321], ['000123', '000123']]) {
+        random.mock.mockImplementation(() => Number('1' + digits));
+        a.send('pair-device-initiate');
+        assert.equal(a.last('pair-device-initiated').pairKey, digits);
+        b.send('pair-device-join', {pairKey: wireCode});
+        assert.equal(b.messages.at(-1).type, 'peers');
+        assert.equal(b.last('pair-device-joined').peerId, a.peer.id);
+    }
+});
+
+test('late disconnect preserves the replacement socket in each kind of room', t => {
+    const {server, connect} = setup(t);
     const old = connect(), partner = connect();
     old.send('pair-device-initiate');
     const {pairKey, roomSecret} = old.last('pair-device-initiated');
@@ -118,6 +135,11 @@ test('late disconnect preserves the replacement socket in each kind of room', t 
     current.send('join-ip-room');
     current.send('join-public-room', {publicRoomId});
     current.send('room-secrets', {roomSecrets: [roomSecret]});
+    for (const [type, id] of [['ip', current.peer.ip], ['secret', roomSecret], ['public-id', publicRoomId]]) {
+        assert.equal(server._memberRoom(old.peer, type, id), undefined);
+        assert.ok(server._memberRoom(current.peer, type, id));
+    }
+    assert.equal(server._memberRoom(current.peer, 'public-id', roomSecret), undefined);
     partner.messages.length = 0;
     old.send('disconnect');
     assert.equal(partner.last('peer-left'), undefined);

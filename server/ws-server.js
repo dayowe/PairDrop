@@ -190,18 +190,19 @@ export default class PairDropWsServer {
             this._send(sender, {type: 'join-key-rate-limit'});
             return;
         }
-        const entry = this._roomSecrets.get(message.pairKey);
+        const pairKey = typeof message.pairKey === 'number' ? String(message.pairKey) : message.pairKey;
+        const entry = this._roomSecrets.get(pairKey);
         if (entry && (entry.expiresAt <= Date.now() || entry.creator.socket.readyState !== WebSocket.OPEN)) {
             this._onPairDeviceCancel(entry.creator);
         }
-        if (!entry || entry.creator.pairKey !== message.pairKey || entry.creator.id === sender.id ||
+        if (!entry || entry.creator.pairKey !== pairKey || entry.creator.id === sender.id ||
             sender.socket.readyState !== WebSocket.OPEN) {
             this._send(sender, {type: 'pair-device-join-key-invalid'});
             return;
         }
 
         const {roomSecret, creator} = entry;
-        this._removePairKey(message.pairKey);
+        this._removePairKey(pairKey);
         this._removePairKey(sender.pairKey);
         // The clients wait for these confirmations before handling peer discovery.
         this._send(sender, {type: 'pair-device-joined', roomSecret, peerId: creator.id});
