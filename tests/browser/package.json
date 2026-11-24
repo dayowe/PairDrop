@@ -1,0 +1,10 @@
+{
+  "name": "pairdrop-browser-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test restart.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.1"
+  }
+}

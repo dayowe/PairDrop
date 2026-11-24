@@ -11,6 +11,16 @@ We are not trying to optimize for some edge-cases. We are optimizing the user fl
 If you want to learn more about simplicity you can read [Insanely Simple: The Obsession that Drives Apple's Success](https://www.amazon.com/Insanely-Simple-Ken-Segall-audiobook/dp/B007Z9686O) or [Thinking, Fast and Slow](https://www.amazon.com/Thinking-Fast-Slow-Daniel-Kahneman/dp/0374533555).
 
 # Contributing guidelines
+
+Run the server tests with `npm ci` and `npm test`. To run the browser regression, install Docker, Node.js 22+ and Chrome or Edge, then run these commands from the repository root.
+
+```sh
+npm ci --prefix tests/browser
+npm test --prefix tests/browser
+```
+
+The test builds the current checkout and restarts a disposable loopback container twice during a browser-to-browser file transfer. Set `BROWSER_CHANNEL=msedge` to use Edge or `PAIRDROP_TEST_IMAGE` to test an already built image.
+
 Make sure to follow these guidelines before opening an [issue](https://github.com/schlagmichdoch/pairdrop/issues/new/choose) or a [pull request](https://github.com/schlagmichdoch/pairdrop/pulls):
 
 - Before opening an issue of a pull request, please check if the issue or the pull request already exists.

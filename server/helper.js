@@ -1,16 +1,15 @@
 import crypto from "crypto";
 
 export const hasher = (() => {
-    let password;
+    const configuredSecret = process.env.PEER_ID_SECRET;
+    if (configuredSecret !== undefined && !/^[0-9a-f]{64}$/i.test(configuredSecret)) {
+        throw new Error("PEER_ID_SECRET must contain 64 hexadecimal characters (32 random bytes).");
+    }
+    const secret = configuredSecret === undefined ? crypto.randomBytes(32) : Buffer.from(configuredSecret, 'hex');
     return {
         hashCodeSalted(salt) {
-            if (!password) {
-                // password is created on first call.
-                password = randomizer.getRandomString(128);
-            }
-
             return crypto.createHash("sha3-512")
-                .update(password)
+                .update(secret)
                 .update(crypto.createHash("sha3-512").update(salt, "utf8").digest("hex"))
                 .digest("hex");
         }

@@ -253,6 +253,28 @@ Overview of available Environment Variables are found [here](#environment-variab
 
 ## Environment Variables
 
+### Keep peer IDs across signaling server restarts
+
+The signaling server uses `PEER_ID_SECRET` to recognize a returning browser or Companion session. Keeping the same value across deployments lets a session reconnect with its existing peer ID while a direct WebRTC transfer continues. With the setting omitted, each server process generates its own secret. Enabling it for the first time or rotating it gives connected sessions new IDs on their next reconnect. Saved device pairings are independent of this setting.
+
+Use an image built from this fork. From the revision you intend to deploy, build the image and generate a secret once.
+
+```sh
+docker build -t "pairdrop:$(git rev-parse --short HEAD)" .
+openssl rand -hex 32
+```
+
+In the private `.env` beside `docker-compose.yml`, replace the placeholders with your image tag and the generated 64 hexadecimal characters.
+
+```dotenv
+PAIRDROP_IMAGE=pairdrop:<short-commit>
+PEER_ID_SECRET=<generated-hex-value>
+```
+
+Run `docker compose up -d`. Both the standard and Coturn Compose files pass the setting to the PairDrop service. Keep the same secret when updating the image tag. Restrict access to the file and its backups. The server rejects an explicitly empty or malformed value at startup.
+
+To require the secret for a particular deployment, use `PEER_ID_SECRET=${PEER_ID_SECRET:?Set PEER_ID_SECRET in .env}` in that service’s `environment` list. Compose will then stop if the value is missing.
+
 ### Debug Mode
 
 ```bash
