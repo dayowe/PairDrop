@@ -1,13 +1,11 @@
-.github
-.git*
-.idea
-dev
-docs
-licenses
-node_modules
-pairdrop-cli
-*.md
-*.yml
-Dockerfile
-rtc_config_example.json
-turnserver_example.conf
+# Send only the application and its notices to the image builder.
+**
+!package.json
+!package-lock.json
+!server/
+!server/**
+!public/
+!public/**
+!LICENSE
+!licenses/
+!licenses/**
