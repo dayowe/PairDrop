@@ -1577,27 +1577,29 @@ class EditPairedDevicesDialog extends Dialog {
 
                 $pairedDevice.innerHTML = `
                     <div class="display-name">
-                        <span class="fw">
-                            ${roomSecretsEntry.display_name}
-                        </span>
+                        <span class="fw"></span>
                     </div>
                     <div class="device-name">
-                        <span class="fw">
-                            ${roomSecretsEntry.device_name}
-                        </span>
+                        <span class="fw"></span>
                     </div>
                     <div class="button-wrapper row fw center wrap">
                         <div class="center grow">
-                            <span class="center wrap">
-                                ${autoAcceptString}
-                            </span>
+                            <span class="center wrap"></span>
                             <label class="auto-accept switch pointer m-1">
-                                <input type="checkbox" ${roomSecretsEntry.auto_accept ? "checked" : ""}>
+                                <input type="checkbox">
                                 <div class="slider round"></div>
                             </label>
                         </div>
-                        <button class="btn grow" type="button">${unpairString}</button>
+                        <button class="btn grow" type="button"></button>
                     </div>`
+
+                // Saved device names are supplied by the remote peer and stored
+                // in IndexedDB. Assign them as text, never as HTML.
+                $pairedDevice.querySelector('.display-name .fw').textContent = roomSecretsEntry.display_name || '';
+                $pairedDevice.querySelector('.device-name .fw').textContent = roomSecretsEntry.device_name || '';
+                $pairedDevice.querySelector('.center.grow .center.wrap').textContent = autoAcceptString;
+                $pairedDevice.querySelector('button').textContent = unpairString;
+                $pairedDevice.querySelector('input[type="checkbox"]').checked = !!roomSecretsEntry.auto_accept;
 
                 $pairedDevice
                     .querySelector('input[type="checkbox"]')
