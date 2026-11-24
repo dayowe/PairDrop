@@ -5,6 +5,7 @@
   "description": "",
   "main": "server/index.js",
   "scripts": {
+    "test": "node --test tests/pairing.test.mjs",
     "start": "node server/index.js",
     "start:prod": "node server/index.js --rate-limit --auto-restart"
   },

@@ -25,7 +25,7 @@ export default class Peer {
 
         this.requestRate = 0;
 
-        this.roomSecrets = [];
+        this.roomSecrets = new Set();
         this.pairKey = null;
 
         this.publicRoomId = null;
@@ -195,14 +195,10 @@ export default class Peer {
     }
 
     addRoomSecret(roomSecret) {
-        if (!(roomSecret in this.roomSecrets)) {
-            this.roomSecrets.push(roomSecret);
-        }
+        this.roomSecrets.add(roomSecret);
     }
 
     removeRoomSecret(roomSecret) {
-        if (roomSecret in this.roomSecrets) {
-            delete this.roomSecrets[roomSecret];
-        }
+        this.roomSecrets.delete(roomSecret);
     }
 }
