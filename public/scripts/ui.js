@@ -609,7 +609,7 @@ class PeerUI {
             files: files,
             to: this._peer.id
         });
-        $input.value = null; // reset input // This should solve the issue on chrome 
+        $input.value = ''; // Allow the same file to trigger the next change event.
     }
 
     setProgress(progress, status) {

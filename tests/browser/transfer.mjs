@@ -2,16 +2,42 @@ import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {createHash, randomBytes} from 'node:crypto';
 import {once} from 'node:events';
+import {readFile} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {test} from 'node:test';
 import {setTimeout as delay} from 'node:timers/promises';
+import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {chromium} from 'playwright-core';
+import {startLocalServer} from './local-server.mjs';
 import {holdFirstWriteAcknowledgement} from './transfer-control.mjs';
 
 const exec = promisify(execFile);
 const root = new URL('../../', import.meta.url);
 const fileSize = 12 * 1024 * 1024;
+
+test('the file picker can resend the same file after the recipient declines it', {timeout: 30_000}, async t => {
+    const origin = await startLocalServer(t);
+    const browser = await chromium.launch({channel: process.env.BROWSER_CHANNEL || 'chrome'});
+    t.after(() => browser.close());
+    const sender = await browser.newPage();
+    const receiver = await browser.newPage();
+    await Promise.all([sender.goto(origin), receiver.goto(origin)]);
+    await receiver.waitForFunction(() => sessionStorage.getItem('peer_id'));
+    const id = await receiver.evaluate(() => sessionStorage.getItem('peer_id'));
+    const picker = sender.locator(`x-peer[id="${id}"] input[type=file]`);
+    const path = fileURLToPath(import.meta.url);
+    await picker.setInputFiles(path);
+    await receiver.locator('#decline-request').click();
+    await sender.waitForFunction(id => pairDrop.peers.peers[id]._filesRequested === null, id);
+
+    // Selecting the same disk path exercises the browser's native change-event behavior.
+    await picker.setInputFiles(path);
+    await receiver.locator('#accept-request').click({timeout: 5000});
+    await receiver.waitForFunction(() => pairDrop.receiveFileDialog._currentFiles?.length);
+    const received = await receiver.evaluate(() => pairDrop.receiveFileDialog._currentFiles[0].text());
+    assert.equal(received, await readFile(path, 'utf8'));
+});
 
 async function docker(args, env = process.env) {
     const {stdout} = await exec('docker', args, {cwd: root, env, timeout: 120_000});
