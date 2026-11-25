@@ -977,7 +977,8 @@ class ReceiveFileDialog extends ReceiveDialog {
         }
         this.$receiveTitle.innerText = Localization.getTranslation("dialogs.receive-title", null, {descriptor: descriptor});
 
-        const canShare = (window.iOS || window.android) && !!navigator.share && navigator.canShare({files}) && !(window.iOS && totalSize > 250000000);
+        const canShare = (window.iOS || window.android) && !(window.iOS && totalSize > 250000000)
+            && !!navigator.share && navigator.canShare({files});
         if (canShare) {
             this.$shareBtn.removeAttribute('hidden');
             this.$shareBtn.onclick = _ => {
@@ -1093,19 +1094,14 @@ class ReceiveFileDialog extends ReceiveDialog {
 
     hide() {
         super.hide();
+        const files = this._currentFiles;
+        this._currentFiles = null;
         setTimeout(async () => {
             this.$shareBtn.setAttribute('hidden', true);
             this.$downloadBtn.setAttribute('disabled', true);
             this.$previewBox.innerHTML = '';
             this._busy = false;
-            if (this._currentFiles) {
-                for (const file of this._currentFiles) {
-                    if (file && file.id) {
-                        FileDigester.deleteFile(file.id);
-                    }
-                }
-                this._currentFiles = null;
-            }
+            for (const file of files || []) FileDigester.deleteFile(file.id);
             await this._nextFiles();
         }, 300);
     }
@@ -1136,7 +1132,7 @@ class ReceiveRequestDialog extends ReceiveDialog {
 
     _onRequestFileTransfer(request, peerId) {
         this._filesTransferRequestQueue.push({request: request, peerId: peerId});
-        if (this.isShown()) return;
+        if (this.isShown() || this._closing) return;
         this._dequeueRequests();
     }
 
@@ -1188,16 +1184,15 @@ class ReceiveRequestDialog extends ReceiveDialog {
     }
 
     hide() {
-        // clear previewBox after dialog is closed
+        if (this._closing) return;
+        this._closing = true;
+        super.hide();
         setTimeout(() => {
             this.$previewBox.innerHTML = '';
             this.$acceptRequestBtn.setAttribute('disabled', true);
+            this._closing = false;
+            this._dequeueRequests();
         }, 300);
-
-        super.hide();
-
-        // show next request
-        setTimeout(() => this._dequeueRequests(), 300);
     }
 }
 

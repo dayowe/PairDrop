@@ -1,12 +1,7 @@
 class ServerConnection {
 
     constructor() {
-        Events.on('pagehide', _ => {
-            this._disconnect();
-            if (BrowserTabsConnector.isOnlyTab()) {
-                FileDigester.clearDirectory();
-            }
-        });
+        Events.on('pagehide', _ => this._disconnect());
 
         Events.on('room-secrets', e => this.send({ type: 'room-secrets', roomSecrets: e.detail }));
         Events.on('join-ip-room', _ => this.send({ type: 'join-ip-room'}));
@@ -512,7 +507,7 @@ class Peer {
     }
 
     _onReceivedPartitionEnd(offset) {
-        this.sendJSON({ type: 'partition-received', offset: offset });
+        this._digester?.onPartition(() => this.sendJSON({type: 'partition-received', offset}));
     }
 
     _sendNextPartition() {
@@ -564,20 +559,22 @@ class Peer {
         }
     }
 
-    _onFilesTransferRequest(request) {
-        if (this._requestPending) {
+    async _onFilesTransferRequest(request) {
+        if (this._requestPending || this._requestAccepted) {
             // Only accept one request at a time per peer
             this.sendJSON({type: 'files-transfer-response', accepted: false});
             return;
         }
-        if (window.iOS && request.totalSize >= 200*1024*1024 && !FileDigester.isStreamingSupported) {
-            // iOS Safari can only put 400MB at once to memory.
-            // Request to send them in chunks of 200MB instead if OPFS streaming is not supported:
-            this.sendJSON({type: 'files-transfer-response', accepted: false, reason: 'ios-memory-limit'});
-            return;
-        }
-
         this._requestPending = request;
+        if (window.iOS && request.totalSize >= 200*1024*1024) {
+            const canStream = await FileDigester.init();
+            if (this._requestPending !== request) return;
+            if (!canStream) {
+                this.sendJSON({type: 'files-transfer-response', accepted: false, reason: 'ios-memory-limit'});
+                this._requestPending = null;
+                return;
+            }
+        }
 
         if (this._autoAccept) {
             // auto accept if set via Edit Paired Devices Dialog
@@ -592,10 +589,20 @@ class Peer {
         });
     }
 
-    _respondToFileTransferRequest(accepted) {
+    async _respondToFileTransferRequest(accepted) {
+        const request = this._requestPending;
+        if (!request) return;
+        if (accepted && FileDigester.isStreamingSupported && navigator.storage?.estimate) {
+            const space = await navigator.storage.estimate().catch(() => null);
+            if (this._requestPending !== request) return;
+            if (space && request.totalSize > space.quota - space.usage) {
+                this._onStorageError('QuotaExceededError');
+                return;
+            }
+        }
         this.sendJSON({type: 'files-transfer-response', accepted: accepted});
         if (accepted) {
-            this._requestAccepted = this._requestPending;
+            this._requestAccepted = request;
             this._totalBytesReceived = 0;
             this._busy = true;
             this._filesReceived = [];
@@ -609,28 +616,44 @@ class Peer {
             this._digester = new FileDigester({size: header.size, name: header.name, mime: header.mime},
                 this._requestAccepted.totalSize,
                 this._totalBytesReceived,
-                fileBlob => this._onFileReceived(fileBlob)
+                fileBlob => this._onFileReceived(fileBlob),
+                errorName => this._onStorageError(errorName)
             );
+            if (header.size === 0) this._digester.unchunk(new ArrayBuffer(0));
         }
     }
 
+    _discardIncomingFiles() {
+        this._digester?.abort();
+        this._digester = null;
+        for (const file of this._filesReceived || []) FileDigester.deleteFile(file.id);
+        this._filesReceived = [];
+        this._requestPending = null;
+        this._requestAccepted = null;
+        if (!this._chunker) this._busy = false;
+    }
+
+    _onStorageError(errorName) {
+        const reason = errorName === 'QuotaExceededError' ? 'storage-full' : 'storage-error';
+        this._discardIncomingFiles();
+        Events.fire('set-progress', {peerId: this._peerId, progress: 1, status: 'wait'});
+        Events.fire('notify-user', Localization.getTranslation('notifications.' + reason));
+        this.sendJSON({type: 'files-transfer-response', accepted: false, reason});
+    }
+
     _abortTransfer() {
-        if (this._digester) {
-            this._digester.abort();
-            this._digester = null;
-        }
+        this._discardIncomingFiles();
         Events.fire('set-progress', {peerId: this._peerId, progress: 1, status: 'wait'});
         Events.fire('notify-user', Localization.getTranslation("notifications.files-incorrect"));
-        this._filesReceived = [];
-        this._requestAccepted = null;
         throw new Error("Received files differ from requested files. Abort!");
     }
 
     _onChunkReceived(chunk) {
-        if(!this._digester || !(chunk.byteLength || chunk.size)) return;
+        const digester = this._digester;
+        if (!digester || !(chunk.byteLength || chunk.size)) return;
 
-        this._digester.unchunk(chunk);
-        const progress = this._digester.progress;
+        digester.unchunk(chunk);
+        const progress = digester.progress;
 
         if (progress > 1) {
             this._abortTransfer();
@@ -652,13 +675,13 @@ class Peer {
         const acceptedHeader = this._requestAccepted.header.shift();
         this._totalBytesReceived += fileBlob.size;
 
-        this.sendJSON({type: 'file-transfer-complete'});
-
         const sameSize = fileBlob.size === acceptedHeader.size;
         const sameName = fileBlob.name === acceptedHeader.name
         if (!sameSize || !sameName) {
             this._abortTransfer();
         }
+        this._digester = null;
+        this.sendJSON({type: 'file-transfer-complete'});
 
         // include for compatibility with 'Snapdrop & PairDrop for Android' app
         Events.fire('file-received', fileBlob);
@@ -689,7 +712,13 @@ class Peer {
         if (!message.accepted) {
             Events.fire('set-progress', {peerId: this._peerId, progress: 1, status: 'wait'});
             this._filesRequested = null;
-            if (message.reason === 'ios-memory-limit') {
+            if (message.reason === 'storage-full' || message.reason === 'storage-error') {
+                this._chunker?.abort();
+                this._chunker = null;
+                this._filesQueue = [];
+                this._busy = !!this._requestAccepted;
+                Events.fire('notify-user', Localization.getTranslation('notifications.peer-' + message.reason));
+            } else if (message.reason === 'ios-memory-limit') {
                 Events.fire('notify-user', Localization.getTranslation("notifications.ios-memory-limit"));
             }
             return;
@@ -868,10 +897,6 @@ class RTCPeer extends Peer {
     }
 
     _disconnect() {
-        if (this._digester) {
-            this._digester.abort();
-            this._digester = null;
-        }
         if (this._conn && this._channel) {
             this._channel.onclose = null;
             this._channel.close();
@@ -881,10 +906,6 @@ class RTCPeer extends Peer {
 
     _onChannelClosed() {
         console.log('RTC: channel closed', this._peerId);
-        if (this._digester) {
-            this._digester.abort();
-            this._digester = null;
-        }
         Events.fire('peer-disconnected', this._peerId);
         if (!this._isCaller) return;
         this._connect(); // reopen the channel
@@ -894,18 +915,10 @@ class RTCPeer extends Peer {
         console.log('RTC: state changed:', this._conn.connectionState);
         switch (this._conn.connectionState) {
             case 'disconnected':
-                if (this._digester) {
-                    this._digester.abort();
-                    this._digester = null;
-                }
                 Events.fire('peer-disconnected', this._peerId);
                 this._onError('rtc connection disconnected');
                 break;
             case 'failed':
-                if (this._digester) {
-                    this._digester.abort();
-                    this._digester = null;
-                }
                 Events.fire('peer-disconnected', this._peerId);
                 this._onError('rtc connection failed');
                 break;
@@ -1162,7 +1175,9 @@ class PeersManager {
     _onPeerDisconnected(peerId) {
         const peer = this.peers[peerId];
         delete this.peers[peerId];
-        if (!peer || !peer._conn) return;
+        if (!peer) return;
+        peer._discardIncomingFiles();
+        if (!peer._conn) return;
         if (peer._channel) peer._channel.onclose = null;
         peer._conn.close();
         peer._busy = false;
@@ -1277,6 +1292,10 @@ class FileChunker {
         this._readChunk();
     }
 
+    abort() {
+        this._reader.abort();
+    }
+
     _readChunk() {
         const chunk = this._file.slice(this._offset, this._offset + this._chunkSize);
         this._reader.readAsArrayBuffer(chunk);
@@ -1315,52 +1334,49 @@ class FileDigester {
     static _initPromise = null;
 
     static async init() {
-        if (FileDigester._initPromise) return await FileDigester._initPromise;
-
-        FileDigester._initPromise = new Promise(resolve => {
-            if (!window.Worker || !window.isSecureContext) {
-                FileDigester.isStreamingSupported = false;
-                resolve(false);
-                return;
-            }
-
-            try {
-                const worker = new Worker('scripts/worker/file-digester-worker.js');
-                const timeout = setTimeout(() => {
-                    worker.terminate();
-                    FileDigester.isStreamingSupported = false;
-                    resolve(false);
-                }, 3000);
-
-                worker.onmessage = e => {
-                    if (e.data && e.data.type === 'support') {
-                        clearTimeout(timeout);
-                        FileDigester.isStreamingSupported = !!e.data.supported;
-                        if (FileDigester.isStreamingSupported) {
-                            FileDigester._worker = worker;
-                            FileDigester.clearDirectory();
-                        } else {
-                            worker.terminate();
-                        }
-                        resolve(FileDigester.isStreamingSupported);
+        if (!window.isSecureContext || !window.Worker || !navigator.locks || !window.crypto?.randomUUID) return false;
+        if (!FileDigester._initPromise) {
+            const session = 'tab-' + crypto.randomUUID();
+            FileDigester._initPromise = new Promise(ready => {
+                navigator.locks.request('pairdrop-transfers/' + session, async () => {
+                    const worker = new Worker('scripts/worker/file-digester-worker.js');
+                    if (!(await FileDigester.checkWorkerSupport(worker, session))) {
+                        worker.terminate();
+                        ready();
+                        return;
                     }
-                };
+                    FileDigester._worker = worker;
+                    FileDigester.isStreamingSupported = true;
+                    worker.onerror = () => {
+                        FileDigester.isStreamingSupported = false;
+                        FileDigester._worker = null;
+                        worker.terminate();
+                    };
+                    ready();
+                    // Saved File objects may outlive the worker. The document owns the lock.
+                    await new Promise(() => {});
+                }).catch(() => ready());
+            });
+        }
+        await FileDigester._initPromise;
+        return FileDigester.isStreamingSupported;
+    }
 
-                worker.onerror = () => {
-                    clearTimeout(timeout);
-                    worker.terminate();
-                    FileDigester.isStreamingSupported = false;
-                    resolve(false);
-                };
-
-                worker.postMessage({ type: 'check-support' });
-            } catch (e) {
-                FileDigester.isStreamingSupported = false;
-                resolve(false);
-            }
+    static checkWorkerSupport(worker, session) {
+        return new Promise(resolve => {
+            const finish = supported => {
+                clearTimeout(timeout);
+                worker.onmessage = null;
+                worker.onerror = null;
+                resolve(supported);
+            };
+            const timeout = setTimeout(() => finish(false), 3000);
+            worker.onerror = () => finish(false);
+            worker.onmessage = ({data}) => {
+                if (data.type === 'support') finish(data.supported);
+            };
+            worker.postMessage({type: 'check-support', session});
         });
-
-        return await FileDigester._initPromise;
     }
 
     static deleteFile(id) {
@@ -1369,15 +1385,9 @@ class FileDigester {
         }
     }
 
-    static clearDirectory() {
-        if (FileDigester._worker) {
-            FileDigester._worker.postMessage({ type: 'clear-directory' });
-        }
-    }
-
-    constructor(meta, totalSize, totalBytesReceived, callback) {
+    constructor(meta, totalSize, totalBytesReceived, callback, onError) {
         if (FileDigester.isStreamingSupported && FileDigester._worker) {
-            return new FileDigesterViaWorker(meta, totalSize, totalBytesReceived, callback, FileDigester._worker);
+            return new FileDigesterViaWorker(meta, totalSize, totalBytesReceived, callback, FileDigester._worker, onError);
         }
         return new FileDigesterViaBuffer(meta, totalSize, totalBytesReceived, callback);
     }
@@ -1397,6 +1407,10 @@ class FileDigesterBase {
     }
 
     abort() {}
+
+    onPartition(acknowledge) {
+        acknowledge();
+    }
 }
 
 class FileDigesterViaBuffer extends FileDigesterBase {
@@ -1408,7 +1422,7 @@ class FileDigesterViaBuffer extends FileDigesterBase {
 
     unchunk(chunk) {
         this._buffer.push(chunk);
-        this._bytesReceived += chunk.byteLength || chunk.size;
+        this._bytesReceived += chunk.byteLength ?? chunk.size;
         this.progress = (this._totalBytesReceived + this._bytesReceived) / this._totalSize;
         if (isNaN(this.progress)) this.progress = 1;
 
@@ -1431,12 +1445,18 @@ class FileDigesterViaBuffer extends FileDigesterBase {
 
 class FileDigesterViaWorker extends FileDigesterBase {
 
-    constructor(meta, totalSize, totalBytesReceived, callback, worker) {
+    constructor(meta, totalSize, totalBytesReceived, callback, worker, onError) {
         super(meta, totalSize, totalBytesReceived, callback);
-        this._id = `pairdrop-file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        this._id = crypto.randomUUID();
         this._worker = worker;
+        this._onError = onError;
         this._onMessage = this._handleWorkerMessage.bind(this);
+        this._onWorkerError = () => {
+            this._cleanUpListener();
+            this._onError?.('UnknownError');
+        };
         this._worker.addEventListener('message', this._onMessage);
+        this._worker.addEventListener('error', this._onWorkerError);
 
         this._worker.postMessage({
             type: 'init-file',
@@ -1448,7 +1468,10 @@ class FileDigesterViaWorker extends FileDigesterBase {
         const msg = e.data;
         if (!msg || msg.id !== this._id) return;
 
-        if (msg.type === 'file') {
+        if (msg.type === 'partition-written') {
+            this._acknowledgePartition();
+            this._acknowledgePartition = null;
+        } else if (msg.type === 'file') {
             this._cleanUpListener();
             const rawFile = msg.file;
             const file = new File([rawFile], this._name, {
@@ -1461,6 +1484,7 @@ class FileDigesterViaWorker extends FileDigesterBase {
         } else if (msg.type === 'error') {
             console.error('FileDigester worker error for file', this._id, msg.error);
             this._cleanUpListener();
+            this._onError?.(msg.name);
         }
     }
 
@@ -1505,9 +1529,16 @@ class FileDigesterViaWorker extends FileDigesterBase {
         });
     }
 
+    onPartition(acknowledge) {
+        // The sender waits for this acknowledgement before sending another partition.
+        this._acknowledgePartition = acknowledge;
+        this._worker.postMessage({type: 'partition', id: this._id});
+    }
+
     _cleanUpListener() {
         if (this._worker && this._onMessage) {
             this._worker.removeEventListener('message', this._onMessage);
+            this._worker.removeEventListener('error', this._onWorkerError);
             this._onMessage = null;
         }
     }

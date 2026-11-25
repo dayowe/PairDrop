@@ -2,7 +2,7 @@
   "name": "pairdrop-browser-tests",
   "private": true,
   "scripts": {
-    "test": "node --test transfer.mjs visibility.mjs"
+    "test": "node --test transfer.mjs visibility.mjs storage.mjs"
   },
   "devDependencies": {
     "playwright-core": "1.65.1"
