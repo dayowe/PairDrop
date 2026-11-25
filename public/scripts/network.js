@@ -3,10 +3,6 @@ class ServerConnection {
     constructor() {
         Events.on('pagehide', _ => this._disconnect());
 
-        if (navigator.connection) {
-            navigator.connection.addEventListener('change', _ => this._reconnect());
-        }
-
         Events.on('room-secrets', e => this.send({ type: 'room-secrets', roomSecrets: e.detail }));
         Events.on('join-ip-room', _ => this.send({ type: 'join-ip-room'}));
         Events.on('room-secrets-deleted', e => this.send({ type: 'room-secrets-deleted', roomSecrets: e.detail}));
@@ -23,6 +19,10 @@ class ServerConnection {
         Events.on('online', _ => this._connect());
 
         this._getConfig().then(() => {
+            if (navigator.connection) {
+                // Network quality estimates can change during a healthy transfer.
+                navigator.connection.addEventListener('change', () => this._connect());
+            }
             if (window.visibilityChangeEvent) {
                 document.addEventListener(window.visibilityChangeEvent, () => this._onVisibilityChange());
             }
@@ -318,11 +318,6 @@ class ServerConnection {
 
     _onError(e) {
         console.error(e);
-    }
-
-    _reconnect() {
-        this._disconnect();
-        this._connect();
     }
 }
 

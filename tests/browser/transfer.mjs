@@ -38,7 +38,7 @@ async function waitForServer(url) {
     throw new Error('PairDrop did not start on the loopback test port.');
 }
 
-test('both sessions keep one peer and finish their transfer across two signaling server restarts', {timeout: 180_000}, async t => {
+async function startPausedTransfer(t) {
     const image = process.env.PAIRDROP_TEST_IMAGE || await docker(['build', '--quiet', '.']);
     const port = await freePort();
     const url = 'http://127.0.0.1:' + port;
@@ -77,7 +77,7 @@ test('both sessions keep one peer and finish their transfer across two signaling
             .map(byte => byte.toString(16).padStart(2, '0')).join('');
     }, {once: true}));
     await sender.evaluate(({remote, size}) => {
-        // Pause at a real partition acknowledgement so both restarts occur mid-transfer.
+        // Pause after the first partition has actually reached the other browser.
         const peer = pairDrop.peers.peers[remote];
         const nextPartition = peer._sendNextPartition.bind(peer);
         peer._sendNextPartition = () => {
@@ -86,11 +86,25 @@ test('both sessions keep one peer and finish their transfer across two signaling
         };
         Events.on('files-sent', () => { window.acknowledged = true; }, {once: true});
         const bytes = Uint8Array.from({length: size}, (_, i) => i % 251);
-        Events.fire('files-selected', {to: remote, files: [new File([bytes], 'restart.bin')]});
+        Events.fire('files-selected', {to: remote, files: [new File([bytes], 'transfer.bin')]});
     }, {remote: ids[1], size: fileSize});
     await receiver.locator('#accept-request').click();
     await sender.waitForFunction(() => !!window.resumeTransfer);
+    return {container, pages, ids};
+}
 
+async function finishTransfer([sender, receiver]) {
+    await sender.evaluate(() => window.resumeTransfer());
+    await sender.waitForFunction(() => window.acknowledged || window.originalChannel.readyState !== 'open');
+    assert.ok(await sender.evaluate(() => window.acknowledged), 'WebRTC channel closed before the file was acknowledged');
+    await receiver.waitForFunction(() => window.receivedHash);
+    const expected = Buffer.alloc(fileSize);
+    for (let i = 0; i < expected.length; i++) expected[i] = i % 251;
+    assert.equal(await receiver.evaluate(() => window.receivedHash), createHash('sha256').update(expected).digest('hex'));
+}
+
+test('both sessions keep one peer and finish their transfer across two signaling server restarts', {timeout: 180_000}, async t => {
+    const {container, pages, ids} = await startPausedTransfer(t);
     for (let restart = 0; restart < 2; restart++) {
         const before = await Promise.all(pages.map(page => page.evaluate(() => window.discoveries)));
         await docker(['restart', '--time', '0', container]);
@@ -105,10 +119,22 @@ test('both sessions keep one peer and finish their transfer across two signaling
             assert.deepEqual(state, {local: ids[i], tiles: [ids[1 - i]], originalChannelOpen: true});
         }
     }
-    await sender.evaluate(() => window.resumeTransfer());
-    await sender.waitForFunction(() => window.acknowledged);
-    await receiver.waitForFunction(() => window.receivedHash);
-    const expected = Buffer.alloc(fileSize);
-    for (let i = 0; i < expected.length; i++) expected[i] = i % 251;
-    assert.equal(await receiver.evaluate(() => window.receivedHash), createHash('sha256').update(expected).digest('hex'));
+    await finishTransfer(pages);
+});
+
+test('a network quality change preserves the signaling socket and the active transfer', {timeout: 180_000}, async t => {
+    const {pages} = await startPausedTransfer(t);
+    const [sender] = pages;
+    const socket = await sender.evaluateHandle(() => {
+        navigator.connection.addEventListener('change', () => { window.qualityChanged = true; }, {once: true});
+        return pairDrop.server._socket;
+    });
+    const cdp = await sender.context().newCDPSession(sender);
+    // Change Chromium's reported network quality while leaving the transport online.
+    await cdp.send('Network.overrideNetworkState', {
+        offline: false, latency: 350, downloadThroughput: 1024 * 1024, uploadThroughput: 1024 * 1024
+    });
+    await sender.waitForFunction(() => window.qualityChanged, null, {timeout: 5000});
+    await finishTransfer(pages);
+    assert.ok(await sender.evaluate(original => pairDrop.server._socket === original && original.readyState === WebSocket.OPEN, socket));
 });
