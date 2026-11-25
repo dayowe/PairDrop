@@ -2,7 +2,6 @@ class ServerConnection {
 
     constructor() {
         Events.on('pagehide', _ => this._disconnect());
-        Events.on(window.visibilityChangeEvent, _ => this._onVisibilityChange());
 
         if (navigator.connection) {
             navigator.connection.addEventListener('change', _ => this._reconnect());
@@ -23,7 +22,12 @@ class ServerConnection {
         Events.on('offline', _ => clearTimeout(this._reconnectTimer));
         Events.on('online', _ => this._connect());
 
-        this._getConfig().then(() => this._connect());
+        this._getConfig().then(() => {
+            if (window.visibilityChangeEvent) {
+                document.addEventListener(window.visibilityChangeEvent, () => this._onVisibilityChange());
+            }
+            this._connect();
+        });
     }
 
     _getConfig() {

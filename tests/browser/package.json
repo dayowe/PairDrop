@@ -2,7 +2,7 @@
   "name": "pairdrop-browser-tests",
   "private": true,
   "scripts": {
-    "test": "node --test restart.mjs"
+    "test": "node --test restart.mjs visibility.mjs"
   },
   "devDependencies": {
     "playwright-core": "1.65.1"
