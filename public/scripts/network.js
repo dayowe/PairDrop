@@ -489,13 +489,17 @@ class Peer {
         this._sendFile(file);
     }
 
-    async _sendFile(file) {
+    _sendFile(file) {
         this.sendJSON({
             type: 'header',
             size: file.size,
             name: file.name,
             mime: file.type
         });
+        this._sendFileContents(file);
+    }
+
+    _sendFileContents(file) {
         this._chunker = new FileChunker(file,
             chunk => this._send(chunk),
             offset => this._onPartitionEnd(offset));
@@ -508,11 +512,6 @@ class Peer {
 
     _onReceivedPartitionEnd(offset) {
         this._digester?.onPartition(() => this.sendJSON({type: 'partition-received', offset}));
-    }
-
-    _sendNextPartition() {
-        if (!this._chunker || this._chunker.isFileEnd()) return;
-        this._chunker.nextPartition();
     }
 
     _sendProgress(progress) {
@@ -536,7 +535,7 @@ class Peer {
                 this._onReceivedPartitionEnd(messageJSON);
                 break;
             case 'partition-received':
-                this._sendNextPartition();
+                this._chunker?.onPartitionReceived();
                 break;
             case 'progress':
                 this._onDownloadProgress(messageJSON.progress);
@@ -760,14 +759,6 @@ class Peer {
 
 class RTCPeer extends Peer {
 
-    // Continuous streaming is paced by the data channel's send buffer:
-    // reading pauses while more than _BUFFER_PAUSE bytes are queued and
-    // resumes once the buffer drains to _BUFFER_RESUME. The pause level
-    // stays well below typical SCTP receive windows so the association
-    // never runs into congestion backoff from an oversized burst.
-    static _BUFFER_PAUSE = 1024 * 1024;    // 1 MB
-    static _BUFFER_RESUME = 256 * 1024;    // 256 KB
-
     constructor(serverConnection, isCaller, peerId, roomType, roomId, rtcConfig) {
         super(serverConnection, isCaller, peerId, roomType, roomId);
 
@@ -848,68 +839,19 @@ class RTCPeer extends Peer {
         }
     }
 
-    async _sendFile(file) {
-        this.sendJSON({
-            type: 'header',
-            size: file.size,
-            name: file.name,
-            mime: file.type
-        });
-
-        if (typeof this._channel?.bufferedAmountLowThreshold === 'number') {
-            // Continuous streaming paced by the send buffer: no waiting
-            // for per-partition acknowledgements, so the throughput is
-            // no longer bound by one round trip per megabyte.
-            this._chunker = new FileChunker(file, chunk => this._sendChunk(chunk));
-            this._chunker.streamAll(() => this._awaitSendBufferDrained());
-        }
-        else {
-            // Browser without bufferedAmountLow support:
-            // fall back to the legacy stop-and-wait handshake.
-            this._chunker = new FileChunker(file,
-                chunk => this._sendChunk(chunk),
-                offset => this._onPartitionEnd(offset));
-            this._chunker.nextPartition();
-        }
-    }
-
-    _sendChunk(chunk) {
-        if (!this._channel || this._channel.readyState !== 'open') {
-            // Channel died mid-transfer: stop the stream loop.
-            if (this._chunker) this._chunker.abort();
-            return;
-        }
-        this._channel.send(chunk);
-    }
-
-    _awaitSendBufferDrained() {
+    _sendFileContents(file) {
         const channel = this._channel;
-        if (!channel || channel.readyState !== 'open') {
-            if (this._chunker) this._chunker.abort();
-            return;
+        // Some receivers expect an empty data message after a zero-byte file header.
+        if (file.size === 0 || typeof channel?.bufferedAmountLowThreshold !== 'number'
+            || !file.arrayBuffer || !window.AbortController) {
+            return super._sendFileContents(file);
         }
-        // Fast path: buffer already low enough to keep streaming.
-        if (channel.bufferedAmount < RTCPeer._BUFFER_PAUSE) return;
-
-        return new Promise(resolve => {
-            const finish = () => {
-                clearInterval(pollTimer);
-                channel.removeEventListener('bufferedamountlow', onLow);
-                channel.removeEventListener('close', onClose);
-                resolve();
-            };
-            const onLow = finish;
-            const onClose = finish;
-            // bufferedamountlow only fires on a transition from above the
-            // threshold to below; poll as a safety net in case that
-            // transition happens before the listener is attached.
-            const pollTimer = setInterval(() => {
-                if (channel.bufferedAmount <= RTCPeer._BUFFER_RESUME
-                    || channel.readyState !== 'open') finish();
-            }, 50);
-            channel.bufferedAmountLowThreshold = RTCPeer._BUFFER_RESUME;
-            channel.addEventListener('bufferedamountlow', onLow);
-            channel.addEventListener('close', onClose);
+        const sender = new RTCFileSender(file, channel);
+        this._chunker = sender;
+        sender.send().catch(error => {
+            if (sender.signal.aborted) return;
+            this._onError(error);
+            channel.close();
         });
     }
 
@@ -1249,6 +1191,7 @@ class PeersManager {
         const peer = this.peers[peerId];
         delete this.peers[peerId];
         if (!peer) return;
+        peer._chunker?.abort();
         peer._discardIncomingFiles();
         if (!peer._conn) return;
         if (peer._channel) peer._channel.onclose = null;
@@ -1348,10 +1291,9 @@ class PeersManager {
 
 class FileChunker {
 
+    static CHUNK_SIZE = 64000;
+
     constructor(file, onChunk, onPartitionEnd) {
-        this._aborted = false;
-        this._blockSize = 16 * 64000;
-        this._chunkSize = 64000; // 64 KB
         this._maxPartitionSize = 1e6; // 1 MB
         this._offset = 0;
         this._partitionSize = 0;
@@ -1367,42 +1309,16 @@ class FileChunker {
         this._readChunk();
     }
 
-    // Continuous mode: send the whole file without waiting for
-    // partition acknowledgements. `beforeChunk` is awaited before every
-    // chunk so the caller can apply backpressure while streaming.
-    // Data is read in _BLOCK_SIZE blocks and fed to the wire as
-    // zero-copy 64 KB views, so only one Blob read task is scheduled
-    // per block instead of one per chunk.
-    async streamAll(beforeChunk) {
-        const blockSize = this._blockSize;
-        while (!this.isFileEnd() && !this._aborted) {
-            if (beforeChunk) await beforeChunk();
-            if (this._aborted) return;
-
-            const block = await this._file
-                .slice(this._offset, Math.min(this._offset + blockSize, this._file.size))
-                .arrayBuffer();
-            if (this._aborted) return;
-
-            const view = new Uint8Array(block);
-            for (let start = 0; start < view.length && !this._aborted; start += this._chunkSize) {
-                if (beforeChunk && start > 0) await beforeChunk();
-                if (this._aborted) return;
-
-                const end = Math.min(start + this._chunkSize, view.length);
-                this._offset += end - start;
-                this._onChunk(view.subarray(start, end));
-            }
-        }
+    onPartitionReceived() {
+        if (!this.isFileEnd()) this.nextPartition();
     }
 
     abort() {
-        this._aborted = true;
         this._reader.abort();
     }
 
     _readChunk() {
-        const chunk = this._file.slice(this._offset, this._offset + this._chunkSize);
+        const chunk = this._file.slice(this._offset, this._offset + FileChunker.CHUNK_SIZE);
         this._reader.readAsArrayBuffer(chunk);
     }
 
@@ -1429,6 +1345,97 @@ class FileChunker {
 
     isFileEnd() {
         return this._offset >= this._file.size;
+    }
+}
+
+class RTCFileSender {
+    static BLOCK_SIZE = 4 * FileChunker.CHUNK_SIZE;
+    static MAX_UNACKNOWLEDGED = 16 * RTCFileSender.BLOCK_SIZE;
+    static ACK_GRACE_MS = 16;
+    static BUFFER_HIGH = 1024 * 1024;
+    static BUFFER_LOW = 256 * 1024;
+
+    constructor(file, channel) {
+        this._file = file;
+        this._channel = channel;
+        this._controller = new AbortController();
+        this.signal = this._controller.signal;
+        this._confirmedOffset = 0;
+    }
+
+    async send() {
+        const channel = this._channel;
+        channel.bufferedAmountLowThreshold = RTCFileSender.BUFFER_LOW;
+        const onClose = () => this.abort();
+        channel.addEventListener('close', onClose);
+        try {
+            for (let offset = 0; offset < this._file.size; offset += RTCFileSender.BLOCK_SIZE) {
+                if (offset) await this._checkpoint(offset);
+                if (this.signal.aborted) return;
+                const block = new Uint8Array(await this._file.slice(offset, offset + RTCFileSender.BLOCK_SIZE).arrayBuffer());
+                for (let start = 0; start < block.length; start += FileChunker.CHUNK_SIZE) {
+                    if (this.signal.aborted) return;
+                    if (channel.bufferedAmount >= RTCFileSender.BUFFER_HIGH) {
+                        await this._waitForBuffer();
+                        if (this.signal.aborted) return;
+                    }
+                    channel.send(block.subarray(start, start + FileChunker.CHUNK_SIZE));
+                }
+            }
+        } finally {
+            channel.removeEventListener('close', onClose);
+        }
+    }
+
+    async _checkpoint(offset) {
+        if (this._acknowledge) {
+            if (offset - this._confirmedOffset >= RTCFileSender.MAX_UNACKNOWLEDGED) {
+                await this._written;
+            } else {
+                // Let a fast receiver pace the next burst. On a slow round trip keep
+                // sending, up to the amount the receiver has yet to confirm.
+                let timer;
+                const grace = new Promise(resolve => { timer = setTimeout(resolve, RTCFileSender.ACK_GRACE_MS); });
+                await Promise.race([this._written, grace]);
+                clearTimeout(timer);
+            }
+        }
+        // A disk-backed receiver can keep only one partition acknowledgement pending.
+        if (this.signal.aborted || this._acknowledge) return;
+        this._written = new Promise(resolve => {
+            this._acknowledge = () => {
+                this._confirmedOffset = offset;
+                resolve();
+            };
+        });
+        this._channel.send(JSON.stringify({type: 'partition', offset}));
+    }
+
+    _waitForBuffer() {
+        const channel = this._channel;
+        return new Promise(resolve => {
+            const finish = () => {
+                clearInterval(timer);
+                channel.removeEventListener('bufferedamountlow', finish);
+                this.signal.removeEventListener('abort', finish);
+                resolve();
+            };
+            const timer = setInterval(() => {
+                if (channel.bufferedAmount <= RTCFileSender.BUFFER_LOW || channel.readyState !== 'open') finish();
+            }, 50);
+            channel.addEventListener('bufferedamountlow', finish);
+            this.signal.addEventListener('abort', finish);
+        });
+    }
+
+    onPartitionReceived() {
+        this._acknowledge?.();
+        this._acknowledge = null;
+    }
+
+    abort() {
+        this._controller.abort();
+        this.onPartitionReceived();
     }
 }
 
@@ -1635,7 +1642,7 @@ class FileDigesterViaWorker extends FileDigesterBase {
     }
 
     onPartition(acknowledge) {
-        // The sender waits for this acknowledgement before sending another partition.
+        // The sender waits for this acknowledgement before sending another partition marker.
         this._acknowledgePartition = acknowledge;
         this._worker.postMessage({type: 'partition', id: this._id});
     }

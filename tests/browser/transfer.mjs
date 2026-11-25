@@ -7,10 +7,11 @@ import {test} from 'node:test';
 import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import {chromium} from 'playwright-core';
+import {holdFirstWriteAcknowledgement} from './transfer-control.mjs';
 
 const exec = promisify(execFile);
 const root = new URL('../../', import.meta.url);
-const fileSize = 3 * 1024 * 1024;
+const fileSize = 12 * 1024 * 1024;
 
 async function docker(args, env = process.env) {
     const {stdout} = await exec('docker', args, {cwd: root, env, timeout: 120_000});
@@ -71,30 +72,29 @@ async function startPausedTransfer(t) {
     }
 
     const [sender, receiver] = pages;
+    await holdFirstWriteAcknowledgement(receiver, ids[0]);
     await receiver.evaluate(() => Events.on('files-received', async e => {
         const bytes = await e.detail.files[0].arrayBuffer();
         window.receivedHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
             .map(byte => byte.toString(16).padStart(2, '0')).join('');
     }, {once: true}));
     await sender.evaluate(({remote, size}) => {
-        // Pause after the first partition has actually reached the other browser.
-        const peer = pairDrop.peers.peers[remote];
-        const nextPartition = peer._sendNextPartition.bind(peer);
-        peer._sendNextPartition = () => {
-            peer._sendNextPartition = nextPartition;
-            window.resumeTransfer = nextPartition;
-        };
         Events.on('files-sent', () => { window.acknowledged = true; }, {once: true});
         const bytes = Uint8Array.from({length: size}, (_, i) => i % 251);
         Events.fire('files-selected', {to: remote, files: [new File([bytes], 'transfer.bin')]});
     }, {remote: ids[1], size: fileSize});
     await receiver.locator('#accept-request').click();
-    await sender.waitForFunction(() => !!window.resumeTransfer);
+    // Later blocks can arrive while the first disk acknowledgement is held.
+    await receiver.waitForFunction(id => window.resumeTransfer &&
+        pairDrop.peers.peers[id]._digester?._bytesReceived >= RTCFileSender.MAX_UNACKNOWLEDGED, ids[0]);
     return {container, pages, ids};
 }
 
-async function finishTransfer([sender, receiver]) {
-    await sender.evaluate(() => window.resumeTransfer());
+async function finishTransfer([sender, receiver], senderId) {
+    assert.ok(await receiver.evaluate(id =>
+        pairDrop.peers.peers[id]._digester?._bytesReceived === RTCFileSender.MAX_UNACKNOWLEDGED, senderId),
+        'The sender exceeded the write limit while the acknowledgement was held');
+    await receiver.evaluate(() => window.resumeTransfer());
     await sender.waitForFunction(() => window.acknowledged || window.originalChannel.readyState !== 'open');
     assert.ok(await sender.evaluate(() => window.acknowledged), 'WebRTC channel closed before the file was acknowledged');
     await receiver.waitForFunction(() => window.receivedHash);
@@ -119,11 +119,11 @@ test('both sessions keep one peer and finish their transfer across two signaling
             assert.deepEqual(state, {local: ids[i], tiles: [ids[1 - i]], originalChannelOpen: true});
         }
     }
-    await finishTransfer(pages);
+    await finishTransfer(pages, ids[0]);
 });
 
 test('a network quality change preserves the signaling socket and the active transfer', {timeout: 180_000}, async t => {
-    const {pages} = await startPausedTransfer(t);
+    const {pages, ids} = await startPausedTransfer(t);
     const [sender] = pages;
     const socket = await sender.evaluateHandle(() => {
         navigator.connection.addEventListener('change', () => { window.qualityChanged = true; }, {once: true});
@@ -135,6 +135,6 @@ test('a network quality change preserves the signaling socket and the active tra
         offline: false, latency: 350, downloadThroughput: 1024 * 1024, uploadThroughput: 1024 * 1024
     });
     await sender.waitForFunction(() => window.qualityChanged, null, {timeout: 5000});
-    await finishTransfer(pages);
+    await finishTransfer(pages, ids[0]);
     assert.ok(await sender.evaluate(original => pairDrop.server._socket === original && original.readyState === WebSocket.OPEN, socket));
 });

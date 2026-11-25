@@ -21,7 +21,7 @@ npm test --prefix tests/browser
 
 The visibility test checks that returning to the page reconnects its signaling socket. The transfer tests run two browser clients against a disposable loopback container. They verify file integrity after a change in reported network quality and across two signaling-server restarts. Set `BROWSER_CHANNEL=msedge` to use Edge or `PAIRDROP_TEST_IMAGE` to run the transfer tests against an already built image.
 
-The storage tests use isolated browser profiles to check cross-tab cleanup, a receiver running out of storage, the in-memory fallback, and the checksum of a 251 MiB download.
+The transfer tests also hold a receiver write acknowledgement to check that the WebRTC sender can keep sending within a bounded window. The storage tests use isolated browser profiles to check cross-tab cleanup, a receiver running out of storage, the in-memory and transport fallbacks, and the checksum of a 251 MiB download.
 
 Make sure to follow these guidelines before opening an [issue](https://github.com/schlagmichdoch/pairdrop/issues/new/choose) or a [pull request](https://github.com/schlagmichdoch/pairdrop/pulls):
 

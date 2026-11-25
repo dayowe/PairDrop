@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto';
 import {test} from 'node:test';
 import {chromium} from 'playwright-core';
 import {startLocalServer} from './local-server.mjs';
+import {holdFirstWriteAcknowledgement} from './transfer-control.mjs';
 
 async function openPage(context, origin, diskBacked = true) {
     const page = await context.newPage();
@@ -14,7 +15,7 @@ async function openPage(context, origin, diskBacked = true) {
 
 async function sendFiles(sender, receiver, sizes) {
     const id = await receiver.evaluate(() => sessionStorage.getItem('peer_id'));
-    await sender.waitForFunction(id => pairDrop.peers.peers[id]?._channel?.readyState === 'open', id);
+    await sender.waitForFunction(id => document.getElementById(id), id);
     await sender.evaluate(({id, sizes}) => {
         const files = sizes.map((size, i) => new File([new Uint8Array(size).fill(i + 1)], 'file-' + i + '.bin'));
         Events.fire('files-selected', {to: id, files});
@@ -100,22 +101,14 @@ test('quota exhaustion fails both ends, removes the partial batch and permits a 
     await receiver.evaluate(() => FileDigester._worker.addEventListener('message', ({data}) => {
         if (data.type === 'file-deleted') window.discardedFile = true;
     }));
-    const id = await receiver.evaluate(() => sessionStorage.getItem('peer_id'));
-    await sender.waitForFunction(id => pairDrop.peers.peers[id]?._channel?.readyState === 'open', id);
-    await sender.evaluate(id => {
-        const peer = pairDrop.peers.peers[id];
-        const next = peer._sendNextPartition.bind(peer);
-        peer._sendNextPartition = () => {
-            peer._sendNextPartition = next;
-            window.resume = next;
-        };
-    }, id);
-    await sendFiles(sender, receiver, [128, 8 * 1024 * 1024]);
-    await sender.waitForFunction(() => !!window.resume);
+    const senderId = await sender.evaluate(() => sessionStorage.getItem('peer_id'));
+    await holdFirstWriteAcknowledgement(receiver, senderId);
+    await sendFiles(sender, receiver, [128, 16 * 1024 * 1024]);
+    await receiver.waitForFunction(() => !!window.resumeTransfer);
     // The offer fit when accepted. Take space away after the first partition was written.
     const {usage} = await receiver.evaluate(() => navigator.storage.estimate());
     await cdp.send('Storage.overrideQuotaForOrigin', {origin, quotaSize: usage + 512 * 1024});
-    await sender.evaluate(() => window.resume());
+    await receiver.evaluate(() => window.resumeTransfer());
     await receiver.waitForFunction(() => messages.includes(Localization.getTranslation('notifications.storage-full')), null, {timeout: 10000});
     await sender.waitForFunction(() => messages.includes(Localization.getTranslation('notifications.peer-storage-full')), null, {timeout: 10000});
     assert.equal(await sender.evaluate(() => !!window.sent), false);
@@ -156,6 +149,47 @@ test('a receiver without disk support can receive an empty file and a nonempty f
         return Promise.all(files.map(async file => [...new Uint8Array(await file.arrayBuffer())]));
     }), [[], Array(32).fill(2)]);
 });
+
+for (const transport of ['WebSocket', 'WebRTC without buffer thresholds']) {
+    test(transport + ' still sends files with the partition handshake', {timeout: 30_000}, async t => {
+        const origin = await startLocalServer(t, {wsFallback: true});
+        const browser = await chromium.launch({channel: process.env.BROWSER_CHANNEL || 'chrome'});
+        t.after(() => browser.close());
+        const context = await browser.newContext({serviceWorkers: 'block'});
+        await context.addInitScript(transport => {
+            if (transport === 'WebSocket') {
+                for (const api of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection']) {
+                    delete window[api];
+                }
+            } else {
+                delete RTCDataChannel.prototype.bufferedAmountLowThreshold;
+            }
+        }, transport);
+        const sender = await openPage(context, origin);
+        const receiver = await openPage(await browser.newContext(), origin);
+        const id = await sender.evaluate(() => sessionStorage.getItem('peer_id'));
+        await receiver.waitForFunction(id => document.getElementById(id), id);
+        await receiver.evaluate(id => {
+            const peer = pairDrop.peers.peers[id];
+            const sendJSON = peer.sendJSON.bind(peer);
+            window.writes = 0;
+            peer.sendJSON = message => {
+                if (message.type === 'partition-received') window.writes++;
+                sendJSON(message);
+            };
+        }, id);
+        const size = 3 * 1024 * 1024;
+        await sender.evaluate(() => Events.on('files-sent', () => { window.sent = true; }, {once: true}));
+        await sendFiles(sender, receiver, [size]);
+        await sender.waitForFunction(() => window.sent);
+        const result = await receiver.evaluate(async () => {
+            const [file] = pairDrop.receiveFileDialog._currentFiles;
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            return {writes, size: bytes.length, intact: bytes.every(byte => byte === 1)};
+        });
+        assert.deepEqual(result, {writes: 3, size, intact: true});
+    });
+}
 
 test('a download over the iOS memory limit keeps its filename and contents', {timeout: 120_000}, async t => {
     const origin = await startLocalServer(t);
