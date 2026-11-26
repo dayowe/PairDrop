@@ -1,5 +1,11 @@
 class ServerConnection {
 
+    // The server sends a ping every second. Allow for queued events when a
+    // suspended browser or native webview starts processing messages again.
+    static HEARTBEAT_TIMEOUT = 10000;
+    static CONNECT_TIMEOUT = 30000;
+    static RESUME_GRACE = 3500;
+
     constructor() {
         Events.on('pagehide', _ => this._disconnect());
 
@@ -16,7 +22,7 @@ class ServerConnection {
         Events.on('leave-public-room', _ => this._onLeavePublicRoom());
 
         Events.on('offline', _ => clearTimeout(this._reconnectTimer));
-        Events.on('online', _ => this._connect());
+        Events.on('online', _ => this.checkConnection());
 
         this._getConfig().then(() => {
             if (navigator.connection) {
@@ -26,6 +32,8 @@ class ServerConnection {
             if (window.visibilityChangeEvent) {
                 document.addEventListener(window.visibilityChangeEvent, () => this._onVisibilityChange());
             }
+            document.addEventListener('resume', () => this.checkConnection());
+            Events.on('focus', () => this.checkConnection());
             this._connect();
         });
     }
@@ -73,7 +81,7 @@ class ServerConnection {
 
     _connect() {
         clearTimeout(this._reconnectTimer);
-        if (this._isConnected() || this._isConnecting() || this._isOffline()) return;
+        if (!this._config || this._isConnected() || this._isConnecting() || this._isOffline()) return;
         if (this._isReconnect) {
             Events.fire('notify-user', {
                 message: Localization.getTranslation("notifications.connecting"),
@@ -83,13 +91,15 @@ class ServerConnection {
         const ws = new WebSocket(this._endpoint());
         ws.binaryType = 'arraybuffer';
         ws.onopen = _ => this._onOpen();
-        ws.onmessage = e => this._onMessage(e.data);
-        ws.onclose = _ => this._onDisconnect();
+        ws.onmessage = e => { if (this._socket === ws) this._onMessage(e.data); };
+        ws.onclose = _ => { if (this._socket === ws) this._onDisconnect(); };
         ws.onerror = e => this._onError(e);
         this._socket = ws;
+        this._expectHeartbeat(ServerConnection.CONNECT_TIMEOUT);
     }
 
     _onOpen() {
+        this._expectHeartbeat(ServerConnection.HEARTBEAT_TIMEOUT);
         console.log('WS: server connected');
         Events.fire('ws-connected');
         if (this._isReconnect) Events.fire('notify-user', Localization.getTranslation("notifications.connected"));
@@ -155,6 +165,7 @@ class ServerConnection {
                 Events.fire('signal', msg);
                 break;
             case 'ping':
+                this._expectHeartbeat(ServerConnection.HEARTBEAT_TIMEOUT);
                 this.send({ type: 'pong' });
                 break;
             case 'display-name':
@@ -278,18 +289,62 @@ class ServerConnection {
                 console.log("successfully removed peerId from localStorage");
             });
 
-        if (!this._socket) return;
+        this._closeSocket();
+    }
 
-        this._socket.onclose = null;
-        this._socket.close();
+    _clearConnectionTimers() {
+        clearTimeout(this._reconnectTimer);
+        clearTimeout(this._heartbeatTimer);
+        clearTimeout(this._probeTimer);
+        this._probeTimer = null;
+    }
+
+    _closeSocket() {
+        this._clearConnectionTimers();
+        const ws = this._socket;
+        if (!ws) return;
+        ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
         this._socket = null;
-        Events.fire('ws-disconnected');
+        ws.close();
         this._isReconnect = true;
+        Events.fire('ws-disconnected');
+    }
+
+    _expectHeartbeat(timeout) {
+        clearTimeout(this._probeTimer);
+        this._probeTimer = null;
+        clearTimeout(this._heartbeatTimer);
+        this._lastActivity = Date.now();
+        this._heartbeatTimer = setTimeout(() => this._probeConnection(), timeout);
+    }
+
+    checkConnection() {
+        if (!this._isConnected() && !this._isConnecting()) {
+            this._connect();
+            return;
+        }
+        const timeout = this._isConnecting() ? ServerConnection.CONNECT_TIMEOUT : ServerConnection.HEARTBEAT_TIMEOUT;
+        const age = Date.now() - this._lastActivity;
+        if (age < 0 || age >= timeout) this._probeConnection();
+    }
+
+    _probeConnection() {
+        if (this._probeTimer) return;
+        // A write can surface an already dead transport. A new ping or a
+        // completed handshake cancels the grace timer and preserves the socket.
+        const ws = this._socket;
+        this._probeTimer = setTimeout(() => {
+            if (this._socket !== ws) return;
+            this._closeSocket();
+            this._connect();
+        }, ServerConnection.RESUME_GRACE);
+        if (this._isConnected()) this.send({type: 'pong'});
     }
 
     _onDisconnect() {
         console.log('WS: server disconnected');
-        setTimeout(() => {
+        this._clearConnectionTimers();
+        this._reconnectTimer = setTimeout(() => {
             this._isReconnect = true;
             Events.fire('ws-disconnected');
             this._reconnectTimer = setTimeout(() => this._connect(), 1000);
@@ -299,9 +354,7 @@ class ServerConnection {
     _onVisibilityChange() {
         const isHidden = window.hiddenProperty ? document[window.hiddenProperty] : false;
         if (isHidden) return;
-        if (!this._isConnected() && !this._isConnecting()) {
-            this._connect();
-        }
+        this.checkConnection();
     }
 
     _isConnected() {
