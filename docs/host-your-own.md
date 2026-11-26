@@ -234,6 +234,7 @@ Everything this server reads, in one place. Each one has a section below.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `PORT` | `3000` | Port to listen on. |
+| `PEER_ID_SECRET` | random at startup | Keep peer IDs across server restarts. Generate a value once with `openssl rand -hex 32` and set `PEER_ID_SECRET=<value>` in Compose's private `.env`. Changing the value invalidates existing peer ID proofs. |
 | `PUBLIC_DIR` | `public` | Directory the client is served from, relative to the working directory. |
 | `DEBUG_MODE` | `false` | Log peer IP details and expose `/ip`. Never use in production. |
 | `RATE_LIMIT` | `false` | `true` limits each client to 1000 requests per 5 minutes. |

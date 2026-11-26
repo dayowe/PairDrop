@@ -7,3 +7,4 @@ rtc_config.json
 ssl/
 
 /target
+/.env

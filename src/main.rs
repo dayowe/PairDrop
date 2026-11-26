@@ -68,7 +68,12 @@ async fn serve() {
         None => tracing::warn!(dir = ?conf.public_dir, "no service-worker.js found"),
     }
 
-    let hub = Arc::new(ws::Hub::new(conf.clone()));
+    let secret = config::peer_id_secret(std::env::var_os("PEER_ID_SECRET").as_deref())
+        .unwrap_or_else(|message| {
+            eprintln!("{message}");
+            std::process::exit(1)
+        });
+    let hub = Arc::new(ws::Hub::new(conf.clone(), secret));
     let app = http::router(conf.clone(), hub, service_worker);
 
     let listener = match tokio::net::TcpListener::bind(addr).await {

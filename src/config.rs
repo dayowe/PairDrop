@@ -168,6 +168,32 @@ fn env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.is_empty())
 }
 
+/// Kept outside Config, which is printed in debug mode.
+pub fn peer_id_secret(value: Option<&std::ffi::OsStr>) -> Result<[u8; 32], &'static str> {
+    const INVALID: &str = "PEER_ID_SECRET must contain 64 hexadecimal characters (32 random bytes)";
+    let Some(value) = value else {
+        return Ok(rand::random());
+    };
+    let mut secret = [0; 32];
+    hex::decode_to_slice(value.to_str().ok_or(INVALID)?, &mut secret).map_err(|_| INVALID)?;
+    Ok(secret)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::peer_id_secret;
+
+    #[test]
+    fn configured_peer_secret_is_repeatable_and_optional() {
+        let value = "ab".repeat(32);
+        assert_eq!(peer_id_secret(Some(value.as_ref())).unwrap(), [0xab; 32]);
+        assert_ne!(peer_id_secret(None).unwrap(), peer_id_secret(None).unwrap());
+        for invalid in ["", "abcd", &"zz".repeat(32)] {
+            assert!(peer_id_secret(Some(invalid.as_ref())).is_err());
+        }
+    }
+}
+
 fn button(prefix: &str) -> Button {
     Button {
         active: env(&format!("{prefix}_BUTTON_ACTIVE")),

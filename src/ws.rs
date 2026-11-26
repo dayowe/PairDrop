@@ -58,18 +58,27 @@ struct PairOffer {
 
 pub struct Hub {
     pub conf: Arc<Config>,
-    /// Salts the peer-id hashes. Regenerated per process, as upstream's `hasher` password is.
-    secret: [u8; 64],
+    secret: [u8; 32],
     state: Mutex<HubState>,
 }
 
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn a_new_hub_accepts_the_same_peer_proof_after_restart() {
+        let config = Arc::new(Config::from_env().unwrap());
+        let id = Uuid::new_v4();
+        let start = |secret| Hub::new(config.clone(), secret);
+        let original = start([42; 32]).peer_id_hash(&id);
+        assert_eq!(start([42; 32]).peer_id_hash(&id), original);
+        assert_ne!(start([43; 32]).peer_id_hash(&id), original);
+    }
+}
+
 impl Hub {
-    pub fn new(conf: Arc<Config>) -> Self {
-        let mut secret = [0u8; 64];
-        for (i, chunk) in secret.chunks_mut(16).enumerate() {
-            chunk.copy_from_slice(&Uuid::new_v4().into_bytes());
-            let _ = i;
-        }
+    pub fn new(conf: Arc<Config>, secret: [u8; 32]) -> Self {
         Hub {
             conf,
             secret,

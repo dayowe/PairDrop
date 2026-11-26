@@ -14,6 +14,7 @@ services:
     volumes:
       - ./rtc_config.json:/rtc_config.json:ro
     environment:
+      - PEER_ID_SECRET
       - WS_FALLBACK=false # Set to true to relay transfers through the server when WebRTC is unavailable.
       - RATE_LIMIT=false # Set to true to limit clients to 1000 requests per 5 min.
       - RTC_CONFIG=/rtc_config.json # Points at the volume above; see rtc_config_example.json.

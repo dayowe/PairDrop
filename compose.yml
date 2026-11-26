@@ -7,6 +7,7 @@ services:
     container_name: pairdrop
     restart: unless-stopped
     environment:
+      - PEER_ID_SECRET
       - WS_FALLBACK=false # Set to true to relay transfers through the server when WebRTC is unavailable.
       - RATE_LIMIT=false # Set to true to limit clients to 1000 requests per 5 min.
       - RTC_CONFIG=false # Set to the path of a file that specifies the STUN/TURN servers.
