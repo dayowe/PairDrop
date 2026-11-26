@@ -1,11 +1,11 @@
-# Send only the application and its notices to the image builder.
 **
-!package.json
-!package-lock.json
-!server/
-!server/**
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
 !public/
 !public/**
 !LICENSE
+!NOTICE
 !licenses/
 !licenses/**

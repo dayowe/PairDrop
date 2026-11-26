@@ -12,7 +12,7 @@ If you want to learn more about simplicity you can read [Insanely Simple: The Ob
 
 # Contributing guidelines
 
-Run the server tests with `npm ci` and `npm test`. To run the browser tests, install Docker, Node.js 22+ and Chrome or Edge, then run these commands from the repository root.
+Run `cargo test --locked` for the Rust server. Run `npm ci` and `npm test` for the Node reference implementation. To run the browser tests, install Docker, Node.js 22+ and Chrome or Edge, then run these commands from the repository root.
 
 ```sh
 npm ci --prefix tests/browser

@@ -1,0 +1,17 @@
+pairdrop-rs
+===========
+
+A fork of PairDrop (https://github.com/schlagmichdoch/PairDrop) by schlagmichdoch.
+
+The web client under `public/` is PairDrop's, carried over and modified. The Node.js signaling
+server was replaced with a Rust one under `src/`, and removed from the tree in 2.0.0 once the
+port had been verified against it frame for frame. It remains in history at `fb743eb:server/`.
+
+PairDrop is licensed under the GNU General Public License v3.0; this fork remains
+under the same license. See LICENSE.
+
+Upstream was last substantively updated on 2025-02-25 (v1.11.2).
+
+This integration includes the Rust signaling server from daviddesmet/pairdrop-rs
+(https://github.com/daviddesmet/pairdrop-rs), the web client from dayowe/PairDrop,
+and the fork's Node.js reference implementation in server/.

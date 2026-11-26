@@ -2,12 +2,12 @@
 
 ## TURN server for Internet Transfer
 
-Beware that you have to host your own TURN server to enable transfers between different networks.
+WebRTC tries a direct connection between devices. A TURN service can relay a transfer when their networks prevent a direct connection. Point `RTC_CONFIG` at your existing ICE configuration to keep using the same provider.
 
 Follow [this guide](https://gabrieltanner.org/blog/turn-server/) to either install coturn directly on your system (Step 1) 
 or deploy it via Docker (Step 5).
 
-You can use the `docker-compose-coturn.yml` in this repository. See [Coturn and PairDrop via Docker Compose](#coturn-and-pairdrop-via-docker-compose).
+You can use the `compose.coturn.yml` in this repository. See [Coturn and PairDrop via Docker Compose](#coturn-and-pairdrop-via-docker-compose).
  
 Alternatively, use a free, pre-configured TURN server like [OpenRelay](https://www.metered.ca/tools/openrelay/)
 
@@ -29,154 +29,30 @@ Naturally, this is also recommended to increase security.
 
 ## Deployment with Docker
 
-The easiest way to get PairDrop up and running is by using Docker.
+The Compose file builds the Rust server and the bundled client from this checkout.
 
-### Docker Image from Docker Hub
+```sh
+docker compose up -d --build
+```
+
+Compose publishes port 3000 on loopback. For a reverse proxy in another container, put the two services on a shared network and point the proxy at `pairdrop:3000`. Set [trusted proxies](#trusted-proxies) for IP-based discovery.
+
+## Deployment from source
+
+From the repository root, install the Rust toolchain, then build and start the server.
 
 ```bash
-docker run -d --restart=unless-stopped --name=pairdrop -p 127.0.0.1:3000:3000 lscr.io/linuxserver/pairdrop
-```
-> This image is hosted by [linuxserver.io](https://linuxserver.io). For more information visit https://hub.docker.com/r/linuxserver/pairdrop
-
-
-<br>
-
-### Docker Image from GitHub Container Registry (ghcr.io)
-
-```bash
-docker run -d --restart=unless-stopped --name=pairdrop -p 127.0.0.1:3000:3000 ghcr.io/schlagmichdoch/pairdrop
+cargo run --release
 ```
 
-
-<br>
-
-### Docker Image self-built
-
-#### Build the image
-
-```bash
-docker build --pull . -f Dockerfile -t pairdrop
-```
-
-> A GitHub action is set up to do this step automatically at the release of new versions.
->
-> `--pull` ensures always the latest node image is used.
-
-#### Run the image
-
-```bash
-docker run -d --restart=unless-stopped --name=pairdrop -p 127.0.0.1:3000:3000 -it pairdrop
-```
-
-> For IP discovery behind a reverse proxy, configure [trusted proxies](#trusted-proxies) on the signaling server.
->
-> To prevent bypassing the proxy by reaching the docker container directly, 
-> `127.0.0.1` is specified in the run command.
-
-
-<br>
-
-### Flags
-
-Set options by using the following flags in the `docker run` command:
-
-#### Port
-
-```bash
--p 127.0.0.1:8080:3000
-```
-
-> Specify the port used by the docker image
->
-> - 3000 -> `-p 127.0.0.1:3000:3000`
-> - 8080 -> `-p 127.0.0.1:8080:3000`
-
-#### Set Environment Variables via Docker
-
-Environment Variables are set directly in the `docker run` command: \
-e.g. `docker run -p 127.0.0.1:3000:3000 -it pairdrop -e DEBUG_MODE="true"`
-
-Overview of available Environment Variables are found [here](#environment-variables).
-
-Example:
-```bash
-docker run -d \
-    --name=pairdrop \
-    --restart=unless-stopped \
-    -p 127.0.0.1:3000:3000 \
-    -e PUID=1000 \
-    -e PGID=1000 \
-    -e WS_SERVER=false \
-    -e WS_FALLBACK=false \
-    -e RTC_CONFIG=false \
-    -e RATE_LIMIT=false \
-    -e DEBUG_MODE=false \
-    -e TZ=Etc/UTC \
-    lscr.io/linuxserver/pairdrop 
-```
-
-<br>
-
-## Deployment with Docker Compose
-
-Here's an example docker compose file:
-
-```yaml
-version: "3"
-services:
-    pairdrop:
-        image: "lscr.io/linuxserver/pairdrop:latest"
-        container_name: pairdrop
-        restart: unless-stopped
-        environment:
-            - PUID=1000 # UID to run the application as
-            - PGID=1000 # GID to run the application as
-            - WS_FALLBACK=false # Set to true to enable websocket fallback if the peer to peer WebRTC connection is not available to the client.
-            - RATE_LIMIT=false # Set to true to limit clients to 1000 requests per 5 min.
-            - RTC_CONFIG=false # Set to the path of a file that specifies the STUN/TURN servers.
-            - DEBUG_MODE=false # Set to true to debug container and peer connections.
-            - TZ=Etc/UTC # Time Zone
-        ports:
-            - "127.0.0.1:3000:3000" # Web UI
-```
-
-Run the compose file with `docker compose up -d`.
-
-> For IP discovery behind a reverse proxy, configure [trusted proxies](#trusted-proxies) on the signaling server.
->
-> To prevent bypassing the proxy by reaching the Docker container 
-> directly, `127.0.0.1` is specified in the `ports` argument.
-
-<br>
-
-## Deployment with Node.js
-
-Clone this repository and enter the folder
-
-```bash
-git clone https://github.com/schlagmichdoch/PairDrop.git && cd PairDrop
-```
-
-Install all dependencies with NPM:
-
-```bash
-npm install
-```
-
-Start the server with:
-
-```bash
-npm start
-```
-
-> By default, the node server listens on port 3000.
-
+> By default the server listens on port 3000 and serves `public/` from the working directory.
+> Set `PUBLIC_DIR` to serve it from somewhere else.
 
 <br>
 
 ### Options / Flags
 
-These are some flags only reasonable when deploying via Node.js
+These are only reasonable when running the binary directly rather than the container.
 
 #### Port
 
@@ -185,63 +61,46 @@ PORT=3000
 ```
 
 > Default: `3000`
-> 
-> Environment variable to specify the port used by the Node.js server \
-> e.g. `PORT=3010 npm start`
+>
+> e.g. `PORT=3010 cargo run --release`
 
 #### Local Run
 
 ```bash
-npm start -- --localhost-only
+cargo run --release -- --localhost-only
 ```
 
 > Only allow connections from localhost.
 >
-> For IP discovery behind a reverse proxy, configure [trusted proxies](#trusted-proxies) on the signaling server.
+> You must use a server proxy to set the `X-Forwarded-For` header
+> to prevent all clients from discovering each other (See [#HTTP-Server](#http-server)).
 >
-> Use this when deploying PairDrop with node to prevent 
-> bypassing the reverse proxy by reaching the Node.js server directly.
+> Use this to prevent clients from bypassing the reverse proxy by reaching the server directly.
+> The container does the same thing by publishing its port on `127.0.0.1`.
 
-#### Automatic restart on error
-
-```bash
-npm start -- --auto-restart
-```
-
-> Restarts server automatically on error
-
-#### Production (autostart and rate-limit)
+#### Production (rate-limit, localhost-only)
 
 ```bash
-npm run start:prod
+RATE_LIMIT=true cargo run --release -- --localhost-only
 ```
 
-> shortcut for `RATE_LIMIT=5 npm start -- --auto-restart`
+> Upstream's `--auto-restart` has no equivalent here. The server does not respawn itself, because
+> a container restart policy or a systemd unit does that job better.
 
-#### Production (autostart, rate-limit, localhost-only)
+#### Set Environment Variables
 
-```bash
-npm run start:prod -- --localhost-only
-```
-
-> To prevent connections to the node server from bypassing \
-> the proxy server you should always use "--localhost-only" on production.
-
-#### Set Environment Variables via Node.js
-
-To specify environment variables set them in the run command in front of `npm start`.
-The syntax is different on Unix and Windows.
+Set them in front of the run command. The syntax differs between Unix and Windows.
 
 On Unix based systems
 
 ```bash
-PORT=3000 RTC_CONFIG="rtc_config.json" npm start
+PORT=3000 RTC_CONFIG="rtc_config.json" cargo run --release
 ```
 
 On Windows
 
-```bash
-$env:PORT=3000 RTC_CONFIG="rtc_config.json"; npm start
+```powershell
+$env:PORT=3000; $env:RTC_CONFIG="rtc_config.json"; cargo run --release
 ```
 
 Overview of available Environment Variables are found [here](#environment-variables).
@@ -250,110 +109,58 @@ Overview of available Environment Variables are found [here](#environment-variab
 
 ## Environment Variables
 
+Everything this server reads, in one place. Each one has a section below.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PORT` | `3000` | Port to listen on. |
+| `PEER_ID_SECRET` | random at startup | Keep peer IDs across server restarts. Generate a value once with `openssl rand -hex 32` and set `PEER_ID_SECRET=<value>` in Compose's private `.env`. Changing the value invalidates existing peer ID proofs. |
+| `PUBLIC_DIR` | `public` | Directory the client is served from, relative to the working directory. |
+| `DEBUG_MODE` | `false` | Log peer IP details and expose `/ip`. Never use in production. |
+| `RATE_LIMIT` | `false` | `true` limits each client to 1000 requests per 5 minutes. |
+| `WS_FALLBACK` | `false` | Relay transfers through the server when WebRTC is unavailable. |
+| `RTC_CONFIG` | `false` | Path to a JSON file specifying STUN/TURN servers. |
+| `SIGNALING_SERVER` | `false` | Use another instance's signaling server, as a host without a protocol prefix. |
+| `IPV6_LOCALIZE` | `false` | `1`-`7`: how many IPv6 hextets group peers into a room. `4` groups a `/64`. |
+| `TRUSTED_PROXIES` | unset | Comma-separated proxy IP addresses or CIDR ranges trusted to supply X-Forwarded-For. |
+| `DONATION_BUTTON_*` | unset | `_ACTIVE`, `_LINK`, `_TITLE`. Override the client defaults. |
+| `TWITTER_BUTTON_*` | unset | As above. Override the client defaults. |
+| `MASTODON_BUTTON_*` | unset | As above. |
+| `BLUESKY_BUTTON_*` | unset | As above. |
+| `CUSTOM_BUTTON_*` | unset | As above. |
+| `PRIVACYPOLICY_BUTTON_*` | unset | As above. |
+| `RUST_LOG` | `pairdrop_rs=info` | Log filter, e.g. `pairdrop_rs=debug`. |
+
+Command-line flags, when running the binary directly: `--localhost-only`, `--rate-limit`,
+`--include-ws-fallback`, and `--healthcheck` (used by the container's `HEALTHCHECK`).
+
+Upstream's `--auto-restart` is not implemented. A container restart policy or a systemd unit
+does that job better.
+
 ### Trusted proxies
 
-Set `TRUSTED_PROXIES` to a comma-separated list of proxy IP addresses or CIDRs. Use an image built from this fork. The standard and Coturn Compose files read the setting from `.env`. Use the source address **as seen by PairDrop**. This example is for nginx connecting over IPv4 loopback.
+Use the socket address of the reverse proxy as seen by PairDrop. For example, set `TRUSTED_PROXIES=192.0.2.10` in your Compose environment if that is the nginx container's fixed address. Configure the internet-facing proxy to overwrite `X-Forwarded-For` with the connecting client's address. With multiple trusted proxies the server reads the chain from right to left and uses the first untrusted hop. Limit the list to infrastructure you control.
 
-```dotenv
-TRUSTED_PROXIES=127.0.0.1
-```
+A forwarded request with an unresolved client address can still use pairing and temporary rooms. Direct connections without forwarding headers use their socket address.
 
-For separate containers, use a stable address for the reverse proxy on the backend network. A dedicated CIDR also works if only trusted proxies can connect from it. Keep the backend port private. When upgrading an existing proxied installation, set this value before switching images.
-
-At the public edge, have the proxy overwrite `X-Forwarded-For` with the verified client address. PairDrop follows that chain from the socket towards the client, stopping at the first address outside the trust list. On installations using Cloudflare or another CDN, configure nginx to recover the visitor address only from the CDN's trusted ingress ranges before forwarding it. PairDrop uses `X-Forwarded-For` for client addresses across providers. [nginx real IP module](https://nginx.org/en/docs/http/ngx_http_realip_module.html)
-
-Direct connections use the socket IP by default. Forwarded requests from an unlisted intermediary and requests from a listed proxy without a usable client address have no IP-based discovery. Device pairing and public rooms still work. A proxy that supplies no forwarding information at all is indistinguishable from a direct client unless you list its address.
-
-To check a new proxy, open two unpaired sessions on the same public IPv4 address and a third on mobile data. The first two should discover each other. The third should appear only after pairing or joining a shared room.
-
-### Keep peer IDs across signaling server restarts
-
-The signaling server uses `PEER_ID_SECRET` to recognize a returning browser or Companion session. Keeping the same value across deployments lets a session reconnect with its existing peer ID while a direct WebRTC transfer continues. With the setting omitted, each server process generates its own secret. Enabling it for the first time or rotating it gives connected sessions new IDs on their next reconnect. Saved device pairings are independent of this setting.
-
-Use an image built from this fork. From the revision you intend to deploy, build the image and generate a secret once.
-
-```sh
-docker build -t "pairdrop:$(git rev-parse --short HEAD)" .
-openssl rand -hex 32
-```
-
-In the private `.env` beside `docker-compose.yml`, replace the placeholders with your image tag and the generated 64 hexadecimal characters.
-
-```dotenv
-PAIRDROP_IMAGE=pairdrop:<short-commit>
-PEER_ID_SECRET=<generated-hex-value>
-```
-
-Run `docker compose up -d`. Both the standard and Coturn Compose files pass the setting to the PairDrop service. Keep the same secret when updating the image tag. Restrict access to the file and its backups. The server rejects an explicitly empty or malformed value at startup.
-
-To require the secret for a particular deployment, use `PEER_ID_SECRET=${PEER_ID_SECRET:?Set PEER_ID_SECRET in .env}` in that service’s `environment` list. Compose will then stop if the value is missing.
-
-### Debug Mode
+### Client directory
 
 ```bash
-DEBUG_MODE="true"
+PUBLIC_DIR=public
 ```
 
-> Default: `false`
+> Default: `public`
 >
-> Logs the used environment variables for debugging.
->
-> Prints debugging information about the connecting peers IP addresses.
-> 
-> This is quite useful to check whether the [#HTTP-Server](#http-server)
-> is configured correctly, so the auto-discovery feature works correctly.
-> Otherwise, all clients discover each other mutually, independently of their network status.
->
-> If this flag is set to `"true"` each peer that connects to the PairDrop server will produce a log to STDOUT like this:
->
-> ```
-> ----DEBUGGING-PEER-IP-START----
-> remoteAddress: ::ffff:172.17.0.1
-> x-forwarded-for: 19.117.63.126
-> PairDrop uses: 19.117.63.126
-> IP is private: false
-> if IP is private, '127.0.0.1' is used instead
-> ----DEBUGGING-PEER-IP-END----
-> ```
->
-> If the IP address "PairDrop uses" matches the public IP address of the client device, everything is set up correctly. \
-> To find out the public IP address of the client device visit https://whatsmyip.com/.
->
-> To preserve your clients' privacy: \
-> **Never use this environment variable in production!**
+> Where the client is served from, relative to the working directory. The container sets this
+> implicitly by placing the client at `/public`.
 
+### Debug mode
 
-<br>
+For local diagnostics, set `DEBUG_MODE=true` to enable `/ip`. It shows the client address resolved through the configured proxy chain. `RUST_LOG=pairdrop_rs=debug` enables detailed logs. Keep debug mode off on a public deployment.
 
 ### Rate limiting requests
 
-```bash
-RATE_LIMIT=1
-```
-
-> Default: `false`
->
-> Limits clients to 1000 requests per 5 min
->
-> When `TRUSTED_PROXIES` is set, the HTTP rate limiter and WebSocket discovery use that proxy list. Without it, the limiter retains its existing numeric hop-count configuration. The following steps describe that HTTP-only setting.
->
-> "If you are behind a proxy/load balancer (usually the case with most hosting services, e.g. Heroku, Bluemix, AWS ELB,
-> Render, Nginx, Cloudflare, Akamai, Fastly, Firebase Hosting, Rackspace LB, Riverbed Stingray, etc.), the IP address of
-> the request might be the IP of the load balancer/reverse proxy (making the rate limiter effectively a global one and
-> blocking all requests once the limit is reached) or undefined."
-> (See: https://express-rate-limit.mintlify.app/guides/troubleshooting-proxy-issues)
->
-> To find the correct number to use for this setting:
->
-> 1. Start PairDrop with `DEBUG_MODE=True` and `RATE_LIMIT=1`
-> 2. Make a `get` request to `/ip` of the PairDrop instance (e.g. `https://pairdrop-example.net/ip`)
-> 3. Check if the IP address returned in the response matches your public IP address (find out by visiting e.g. https://whatsmyip.com/)
-> 4. You have found the correct number if the IP addresses match. If not, then increase `RATE_LIMIT` by one and redo 1. - 4.
->
-> e.g. on Render you must use RATE_LIMIT=5
-
-
-<br>
+Set `RATE_LIMIT=true` to allow 1000 HTTP requests per client in five minutes. The limiter resolves the client through `TRUSTED_PROXIES` and falls back to the socket address if the forwarded address cannot be resolved.
 
 ### IPv6 Localization
 
@@ -506,9 +313,7 @@ PRIVACYPOLICY_BUTTON_TITLE="Open our privacy policy"
 
 ## HTTP-Server
 
-For a proxied deployment, set [trusted proxies](#trusted-proxies) and pass the client address on HTTP requests and WebSocket upgrades.
-
-To check if your setup is configured correctly [use the environment variable `DEBUG_MODE="true"`](#debug-mode).
+Configure [trusted proxies](#trusted-proxies) when running behind nginx. The proxy must preserve WebSocket upgrades.
 
 ### Using nginx
 
@@ -637,7 +442,7 @@ service apache2 reload
 ## Coturn and PairDrop via Docker Compose
 
 ### Setup container
-To run coturn and PairDrop at once by using the `docker-compose-coturn.yml` with TURN over TLS enabled
+To run coturn and PairDrop at once by using the `compose.coturn.yml` with TURN over TLS enabled
 you need to follow these steps:
 
 1. Generate or retrieve certificates for your `<DOMAIN>` (e.g. letsencrypt / certbot)
@@ -650,19 +455,19 @@ you need to follow these steps:
 8. Change `<DOMAIN>` in both files to the domain where your PairDrop instance is running 
 9. Change `username` and `password` in `turnserver.conf` and `rtc-config.json`
 10. To start the container including coturn run: \
-  `docker compose -f docker-compose-coturn.yml up -d`
+  `docker compose -f compose.coturn.yml up -d`
 
 <br>
 
 #### Setup container
 To restart the container including coturn run: \
-  `docker compose -f docker-compose-coturn.yml restart`
+  `docker compose -f compose.coturn.yml restart`
 
 <br>
 
 #### Setup container
 To stop the container including coturn run: \
-  `docker compose -f docker-compose-coturn.yml stop`
+  `docker compose -f compose.coturn.yml stop`
 
 <br>
 
@@ -678,41 +483,27 @@ To run PairDrop including its own coturn-server you need to punch holes in the f
 
 ### Install
 
-All files needed for developing are available in the folder `./dev`.
+Run `cargo run` from the checkout. The Rust server serves the static client in `public/`.
 
-For convenience, there is also a docker compose file for developing:
+Now point your web browser to `http://localhost:3000`.
 
-#### Developing with docker compose
-First, [Install docker with docker compose.](https://docs.docker.com/compose/install/)
-
-Then, clone the repository and run docker compose:
-
-```bash
-git clone https://github.com/schlagmichdoch/PairDrop.git && cd PairDrop
-```
-```bash
-docker compose -f docker-compose-dev.yml up --no-deps --build
-```
-
-Now point your web browser to `http://localhost:8080`.
-
-- To debug the Node.js server, run `docker logs pairdrop`.
-- After changes to the code you have to rerun the `docker compose` command
+- `cargo run` serves `public/` directly, so a client change needs only a reload.
+- A server change needs a restart.
+- `RUST_LOG=pairdrop_rs=debug cargo run` logs peer connections and room membership.
+- The Node reference server is in `server/`. Run `npm ci`, then `PORT=3001 node server/index.js` to compare it on a separate port.
 
 <br>
 
 #### Testing PWA related features
 
-PWAs requires the app to be served under a correctly set up and trusted TLS endpoint.
+PWAs require the app to be served from a secure context. `http://localhost:3000` already counts
+as one, so service workers, installation and WebRTC all work against `cargo run` with no
+certificate at all.
 
-The NGINX container creates a CA certificate and a website certificate for you. 
-To correctly set the common name of the certificate, 
-you need to change the FQDN environment variable in `docker-compose-dev.yml`
-to the fully qualified domain name of your workstation. (Default: localhost)
-
-If you want to test PWA features, you need to trust the CA of the certificate for your local deployment. \
-For your convenience, you can download the crt file from `http://<Your FQDN>:8080/ca.crt`. \
-Install that certificate to the trust store of your operating system. \
+Reaching the dev server from another device on your network does need TLS, since those origins
+are not `localhost`. Put a reverse proxy in front with a certificate your devices already trust,
+and point it at `127.0.0.1:3000`. If you issue your own CA for that, install it in each device's
+trust store:
 
 ##### Windows
 - Make sure to install it to the `Trusted Root Certification Authorities` store.
@@ -722,26 +513,18 @@ Install that certificate to the trust store of your operating system. \
 - expand `Trust`, and select `Always Trust` for SSL.
 
 ##### Firefox
-Firefox uses its own trust store. To install the CA:
-- point Firefox at `http://<Your FQDN>:8080/ca.crt` (Default: `http://localhost:8080/ca.crt`)
-- When prompted, select `Trust this CA to identify websites` and click _OK_.
-
-Alternatively:
-1. Download `ca.crt` from `http://<Your FQDN>:8080/ca.crt` (Default: `http://localhost:8080/ca.crt`)
-2. Go to `about:preferences#privacy` scroll down to `Security` and `Certificates` and click `View Certificates`
-3. Import the downloaded certificate file (step 1)
+Firefox uses its own trust store:
+1. Go to `about:preferences#privacy`, scroll to `Security` and `Certificates`, click `View Certificates`
+2. Import your `ca.crt` under `Authorities`
+3. When prompted, select `Trust this CA to identify websites` and click _OK_.
 
 ##### Chrome
 - When using Chrome, you need to restart Chrome so it reloads the trust store (`chrome://restart`).
 - Additionally, after installing a new cert, you need to clear the Storage (DevTools → Application → Clear storage → Clear site data).
 
 ##### Google Chrome
-- To skip the installation of the certificate, you can also open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
-- The feature `Insecure origins treated as secure` must be enabled and the list must include your PairDrop test instance. E.g.: `http://127.0.0.1:3000,https://127.0.0.1:8443`
-
-Please note that the certificates (CA and webserver cert) expire after a day.
-Also, whenever you restart the NGINX Docker container new certificates are created.
-
-The site is served on `https://<Your FQDN>:8443` (Default: `https://localhost:8443`).
+- To skip certificates entirely, open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+- Enable `Insecure origins treated as secure` and list the origin you reach the dev server on,
+  e.g. `http://192.168.1.10:3000`. This is the quickest way to test PWA behaviour from a phone.
 
 [< Back](/README.md)

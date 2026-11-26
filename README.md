@@ -20,6 +20,8 @@
 </div>
 <br>
 
+This branch combines the PairDrop client maintained in this fork with the [Rust signaling server by daviddesmet](https://github.com/daviddesmet/pairdrop-rs).
+
 ## Features
 File sharing on your local network that works on all platforms.
 
@@ -102,7 +104,7 @@ Connect to others in complex network situations, or over the Internet.
 ## Built with the following awesome technologies:
 * Vanilla HTML5 / JS ES6 / CSS 3 frontend
 * [WebRTC](http://webrtc.org/) / WebSockets
-* [Node.js](https://nodejs.org/en/) backend
+* Rust signaling server with WebRTC peer-to-peer transfers
 * [Progressive web app (PWA)](https://en.wikipedia.org/wiki/Progressive_web_app) unified functionality
 * [IndexedDB API](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API) storage handling
 * [zip.js](https://gildas-lormeau.github.io/zip.js/) library
@@ -114,7 +116,7 @@ Connect to others in complex network situations, or over the Internet.
 
 [FAQ](docs/faq.md)
 
-[Host your own instance with Docker or Node.js](docs/host-your-own.md).
+[Host your own instance with Docker or Rust](docs/host-your-own.md).
 
 ## Support
 <a href="https://www.buymeacoffee.com/pairdrop" target="_blank">
