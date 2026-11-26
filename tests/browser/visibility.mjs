@@ -94,7 +94,8 @@ test('a heartbeat during the wake grace period preserves the connected peer', as
     const peer = await browser.newPage();
     const client = await browser.newPage();
     await Promise.all([peer.goto(origin), client.goto(origin)]);
-    await client.waitForFunction(() => Object.values(pairDrop.peers.peers).some(p => p._channel?.readyState === 'open'));
+    await client.waitForFunction(() => typeof pairDrop !== 'undefined' && pairDrop.peers &&
+        Object.values(pairDrop.peers.peers).some(p => p._channel?.readyState === 'open'));
     await client.evaluate(() => {
         const connection = pairDrop.server;
         window.originalSocket = connection._socket;
